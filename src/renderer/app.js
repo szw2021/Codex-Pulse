@@ -21,8 +21,7 @@
     error: null,
     remoteLoading: false,
     yoloEnabled: false,
-    refreshedAt: null,
-    remoteRefreshedAt: null,
+    sessionTitleMode: 'prompt',
   };
 
   const elements = {
@@ -34,7 +33,7 @@
     menuButton: document.querySelector('#menu-button'),
     menu: document.querySelector('#menu'),
     yoloToggle: document.querySelector('#yolo-toggle'),
-    yoloBanner: document.querySelector('#yolo-banner'),
+    yoloBadge: document.querySelector('#yolo-badge'),
     remoteToolbar: document.querySelector('#remote-toolbar'),
     remoteFilter: document.querySelector('#remote-filter'),
     manageRemoteButton: document.querySelector('#manage-remote-button'),
@@ -49,13 +48,9 @@
     reloadSSHHosts: document.querySelector('#reload-ssh-hosts'),
     emptyAction: document.querySelector('#empty-action'),
     health: document.querySelector('#health-dot'),
-    footerLabel: document.querySelector('#footer-label'),
-    refreshedAt: document.querySelector('#refreshed-at'),
   };
 
-  const bridge = (action, details = {}) => {
-    window.webkit?.messageHandlers?.codexPulse?.postMessage({ action, ...details });
-  };
+  const bridge = (action, details = {}) => window.codexPulse?.send(action, details);
 
   const currentSessions = () => {
     if (appState.source !== 'remote') return appState.sessions;
@@ -84,17 +79,24 @@
     appState.error = typeof payload.error === 'string' ? payload.error : null;
     appState.remoteLoading = Boolean(payload.remoteLoading);
     if (typeof payload.yoloEnabled === 'boolean') appState.yoloEnabled = payload.yoloEnabled;
-    appState.refreshedAt = payload.refreshedAt || Date.now();
-    appState.remoteRefreshedAt = payload.remoteRefreshedAt || null;
+    if (payload.sessionTitleMode === 'prompt' || payload.sessionTitleMode === 'title') {
+      appState.sessionTitleMode = payload.sessionTitleMode;
+    }
     elements.reloadSSHHosts.textContent = '重新读取';
     render();
   }
 
   function render() {
     document.body.classList.toggle('yolo-enabled', appState.yoloEnabled);
+    document.body.classList.toggle('remote-source', appState.source === 'remote');
     elements.yoloToggle.classList.toggle('enabled', appState.yoloEnabled);
     elements.yoloToggle.setAttribute('aria-checked', String(appState.yoloEnabled));
-    elements.yoloBanner.hidden = !appState.yoloEnabled;
+    elements.yoloBadge.hidden = !appState.yoloEnabled;
+    document.querySelectorAll('[data-session-title-mode]').forEach(button => {
+      const selected = button.dataset.sessionTitleMode === appState.sessionTitleMode;
+      button.classList.toggle('selected', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    });
     elements.refresh.classList.toggle('spinning', appState.source === 'remote' && appState.remoteLoading);
     renderRemoteControls();
 
@@ -105,11 +107,15 @@
     for (const state of Object.keys(stateMeta)) {
       document.querySelector(`#count-${state}`).textContent = String(count(state));
     }
+    document.querySelector('#count-all').textContent = String(currentSessions().length);
 
     const completedPending = count('completed_pending');
     const attention = count('attention');
     const active = count('active');
-    elements.subtitle.textContent = completedPending > 0
+    const error = currentError();
+    elements.subtitle.textContent = error
+      ? error
+      : completedPending > 0
       ? `有 ${completedPending} 个任务完成待确认`
       : attention > 0
       ? `有 ${attention} 个会话需要你处理`
@@ -119,9 +125,6 @@
 
     document.querySelectorAll('[data-filter]').forEach(button => {
       button.classList.toggle('selected', button.dataset.filter === appState.filter);
-    });
-    document.querySelectorAll('[data-summary]').forEach(button => {
-      button.classList.toggle('selected', button.dataset.summary === appState.filter);
     });
 
     const query = appState.query.trim().toLocaleLowerCase('zh-CN');
@@ -135,22 +138,17 @@
     elements.list.replaceChildren(...visible.map(createSessionRow));
     renderEmptyState(visible.length);
 
-    const error = currentError();
     const failedRemoteHosts = Object.keys(appState.remoteErrors).length;
     elements.health.classList.toggle('error', Boolean(error) || (appState.source === 'remote' && failedRemoteHosts > 0));
     elements.health.classList.toggle('remote', appState.source === 'remote' && !error && failedRemoteHosts === 0);
     elements.health.classList.toggle('yolo', appState.source === 'local' && appState.yoloEnabled && !error);
-    elements.footerLabel.textContent = error || (appState.source === 'remote'
+    elements.health.title = error || (appState.source === 'remote'
       ? (failedRemoteHosts > 0
         ? `${failedRemoteHosts} 台服务器连接失败 · 其余结果已显示`
         : appState.remoteLoading
           ? '正在通过 SSH 读取远程会话…'
           : `SSH 远程同步 · ${appState.remoteHosts.length} 台服务器`)
       : (appState.yoloEnabled ? 'YOLO 已开启 · 跳过审批与沙箱' : '每 2 秒同步 · 数据仅在本机读取'));
-    const refreshedAt = appState.source === 'remote' ? appState.remoteRefreshedAt : appState.refreshedAt;
-    elements.refreshedAt.textContent = refreshedAt
-      ? new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(refreshedAt)
-      : '';
     elements.search.placeholder = appState.source === 'remote' ? '搜索远程会话、项目或服务器' : '搜索会话或项目';
   }
 
@@ -300,20 +298,39 @@
     copy.className = 'row-copy';
     const title = document.createElement('h2');
     title.className = 'row-title';
-    title.textContent = session.lastPrompt || session.title;
-    title.title = session.lastPrompt || session.title;
+    const titleText = appState.sessionTitleMode === 'title'
+      ? (session.title || session.lastPrompt)
+      : (session.lastPrompt || session.title);
+    title.textContent = titleText || '无标题会话';
+    title.title = title.textContent;
 
     const detail = document.createElement('div');
-    detail.className = 'row-detail';
+    detail.className = 'row-meta';
     const stateLabel = document.createElement('span');
     stateLabel.className = 'state-label';
     stateLabel.textContent = meta.label;
-    const dot = document.createElement('span');
-    dot.textContent = '·';
-    const detailText = document.createElement('span');
-    detailText.className = 'detail-text';
-    detailText.textContent = session.detail;
-    detail.append(stateLabel, dot, detailText);
+    detail.append(stateLabel);
+
+    const project = document.createElement('span');
+    project.className = 'project';
+    project.title = session.source === 'remote' ? `${session.remoteHost} · ${session.cwd}` : session.cwd;
+    const projectLabel = session.source === 'remote'
+      ? `${session.remoteHost} · ${session.projectName || '远程目录'}`
+      : session.projectName;
+    project.textContent = projectLabel || '';
+    if (projectLabel) detail.append(separator(), project);
+    if (session.model) {
+      const model = document.createElement('span');
+      model.className = 'model';
+      model.textContent = session.model;
+      detail.append(separator(), model);
+    }
+    if (session.state !== 'completed' && session.detail) {
+      const detailText = document.createElement('span');
+      detailText.className = 'detail-text';
+      detailText.textContent = session.detail;
+      detail.append(separator(), detailText);
+    }
     copy.append(title, detail);
 
     const time = document.createElement('time');
@@ -321,31 +338,6 @@
     time.textContent = relativeTime(session.updatedAt);
     top.append(mark, copy, time);
 
-    const bottom = document.createElement('div');
-    bottom.className = 'row-bottom';
-    const project = document.createElement('span');
-    project.className = 'project';
-    project.title = session.source === 'remote' ? `${session.remoteHost} · ${session.cwd}` : session.cwd;
-    const folder = document.createElement('span');
-    folder.className = 'folder';
-    folder.textContent = session.source === 'remote' ? '⇄' : '◆';
-    const projectLabel = session.source === 'remote'
-      ? `${session.remoteHost} · ${session.projectName || '远程目录'}`
-      : session.projectName;
-    project.append(folder, document.createTextNode(projectLabel || ''));
-    bottom.append(project);
-    if (session.model) {
-      const sep = document.createElement('span');
-      sep.textContent = '·';
-      const model = document.createElement('span');
-      model.className = 'model';
-      model.textContent = session.model;
-      bottom.append(sep, model);
-    }
-
-    const shortId = document.createElement('span');
-    shortId.className = 'short-id';
-    shortId.textContent = `#${session.shortId}`;
     const actions = document.createElement('span');
     actions.className = 'row-actions';
     if (session.source === 'remote') {
@@ -361,8 +353,7 @@
         actionButton('resume', appState.yoloEnabled ? '以 YOLO 模式在终端中继续' : '在终端中继续', '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/>', session.id),
       );
     }
-    bottom.append(shortId, actions);
-    row.append(top);
+    row.append(top, actions);
     if (session.state === 'completed_pending' && session.completionKey) {
       const review = document.createElement('div');
       review.className = 'completion-review';
@@ -378,8 +369,14 @@
       review.append(acknowledge);
       row.append(review);
     }
-    row.append(bottom);
     return row;
+  }
+
+  function separator() {
+    const element = document.createElement('span');
+    element.className = 'meta-separator';
+    element.textContent = '·';
+    return element;
   }
 
   function actionButton(action, label, svg, id, details = {}) {
@@ -414,12 +411,6 @@
 
   document.querySelectorAll('[data-filter]').forEach(button => {
     button.addEventListener('click', () => { appState.filter = button.dataset.filter; render(); });
-  });
-  document.querySelectorAll('[data-summary]').forEach(button => {
-    button.addEventListener('click', () => {
-      appState.filter = appState.filter === button.dataset.summary ? 'all' : button.dataset.summary;
-      render();
-    });
   });
   document.querySelectorAll('[data-source]').forEach(button => {
     button.addEventListener('click', () => {
@@ -480,6 +471,17 @@
     render();
     bridge('setYolo', { enabled: appState.yoloEnabled });
   });
+  document.querySelectorAll('[data-session-title-mode]').forEach(button => {
+    button.addEventListener('click', event => {
+      event.stopPropagation();
+      const mode = button.dataset.sessionTitleMode;
+      if (mode !== 'prompt' && mode !== 'title') return;
+      appState.sessionTitleMode = mode;
+      render();
+      elements.menu.hidden = true;
+      bridge('setSessionTitleMode', { mode });
+    });
+  });
   elements.menuButton.addEventListener('click', event => {
     event.stopPropagation();
     elements.menu.hidden = !elements.menu.hidden;
@@ -491,9 +493,6 @@
   document.querySelectorAll('[data-menu-action]').forEach(button => {
     button.addEventListener('click', () => bridge(button.dataset.menuAction));
   });
-  document.querySelector('#drag-region').addEventListener('mousedown', event => {
-    if (!event.target.closest('button, input, .menu')) bridge('drag');
-  });
-
-  window.CodexPulse = { receive };
+  window.codexPulse?.onState(receive);
+  bridge('ready');
 })();

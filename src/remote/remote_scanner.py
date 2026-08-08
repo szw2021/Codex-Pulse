@@ -1,9 +1,12 @@
+import atexit
 import datetime
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -35,12 +38,30 @@ def json_line(raw):
 
 
 def prompt_from_record(record):
-    if not isinstance(record, dict) or record.get("type") != "event_msg":
+    if not isinstance(record, dict):
         return None
     payload = record.get("payload")
-    if not isinstance(payload, dict) or payload.get("type") != "user_message":
+    if not isinstance(payload, dict):
         return None
-    return clean(payload.get("message"))
+    if record.get("type") == "event_msg" and payload.get("type") == "user_message":
+        return clean(payload.get("message"))
+    if (record.get("type") != "response_item"
+            or payload.get("type") != "message"
+            or payload.get("role") != "user"):
+        return None
+    content = payload.get("content")
+    if isinstance(content, str):
+        return clean(content)
+    if not isinstance(content, list):
+        return None
+    text = " ".join(
+        item.get("text", "")
+        for item in content
+        if isinstance(item, dict)
+        and item.get("type") in ("input_text", "text")
+        and isinstance(item.get("text"), str)
+    )
+    return clean(text)
 
 
 def latest_prompt(path):
@@ -192,9 +213,9 @@ def detect_state(path, approval_mode, active_pid, working_child, modified_at, no
             last_event_at = timestamp
         outer_type = root.get("type")
         payload_type = payload.get("type")
+        if last_prompt_value is None:
+            last_prompt_value = prompt_from_record(root)
         if outer_type == "event_msg":
-            if last_prompt_value is None and payload_type == "user_message":
-                last_prompt_value = clean(payload.get("message"))
             if not found_boundary and payload_type == "task_started":
                 unfinished = True
                 found_boundary = True
@@ -246,12 +267,47 @@ def detect_state(path, approval_mode, active_pid, working_child, modified_at, no
     return "completed", "会话当前空闲", updated_at, last_prompt_value, None
 
 
+def open_database(database_path):
+    direct_error = None
+    try:
+        connection = sqlite3.connect(
+            "file:{}?mode=ro".format(database_path), uri=True, timeout=1
+        )
+        connection.execute("PRAGMA schema_version").fetchone()
+        return connection
+    except sqlite3.Error as exc:
+        direct_error = exc
+        try:
+            connection.close()
+        except (NameError, sqlite3.Error):
+            pass
+
+    snapshot_root = tempfile.mkdtemp(prefix="codex-pulse-db-")
+    atexit.register(shutil.rmtree, snapshot_root, ignore_errors=True)
+    snapshot_path = os.path.join(snapshot_root, os.path.basename(database_path))
+    try:
+        shutil.copy2(database_path, snapshot_path)
+        for suffix in ("-wal",):
+            source = database_path + suffix
+            if os.path.isfile(source):
+                shutil.copy2(source, snapshot_path + suffix)
+        connection = sqlite3.connect(snapshot_path, timeout=1)
+        connection.execute("PRAGMA schema_version").fetchone()
+        return connection
+    except (OSError, sqlite3.Error) as snapshot_error:
+        raise sqlite3.OperationalError(
+            "direct read failed ({}); snapshot read failed ({})".format(
+                direct_error, snapshot_error
+            )
+        ) from snapshot_error
+
+
 def main():
     codex_home = os.path.abspath(os.path.expanduser(os.environ.get("CODEX_HOME", "~/.codex")))
     database_path = os.path.join(codex_home, "state_5.sqlite")
     sessions_root = os.path.join(codex_home, "sessions")
     active_paths, children, commands = process_snapshot(sessions_root)
-    connection = sqlite3.connect("file:{}?mode=ro".format(database_path), uri=True, timeout=1)
+    connection = open_database(database_path)
     connection.row_factory = sqlite3.Row
     columns = {row[1] for row in connection.execute("PRAGMA table_info(threads)").fetchall()}
 

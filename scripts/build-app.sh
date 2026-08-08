@@ -3,28 +3,26 @@ set -euo pipefail
 
 PROJECT_ROOT="${0:A:h:h}"
 APP_PATH="${1:-${PROJECT_ROOT}/dist/Codex Pulse.app}"
-CONTENTS_PATH="${APP_PATH}/Contents"
-SOURCE_FILES=(Sources/CodexPulseNative/*.m)
+ARCHITECTURE="$(node -p 'process.arch')"
+PACKAGED_APP="${PROJECT_ROOT}/out/Codex Pulse-darwin-${ARCHITECTURE}/Codex Pulse.app"
 
 cd "${PROJECT_ROOT}"
-mkdir -p "${PROJECT_ROOT}/.build/release" "${CONTENTS_PATH}/MacOS" "${CONTENTS_PATH}/Resources/Web"
+if [[ ! -d node_modules ]]; then
+    echo "Dependencies are missing. Run npm install first." >&2
+    exit 1
+fi
 
-xcrun clang \
-    -fobjc-arc \
-    -fmodules \
-    -Wall \
-    -Wextra \
-    -Wno-unused-parameter \
-    -mmacosx-version-min=14.0 \
-    -framework Cocoa \
-    -framework WebKit \
-    -lsqlite3 \
-    "${SOURCE_FILES[@]}" \
-    -o "${PROJECT_ROOT}/.build/release/CodexPulse"
+export ELECTRON_MIRROR="${ELECTRON_MIRROR:-https://npmmirror.com/mirrors/electron/}"
+npm run package -- --platform=darwin --arch="${ARCHITECTURE}"
+if [[ ! -d "${PACKAGED_APP}" ]]; then
+    echo "Packaged application was not found at ${PACKAGED_APP}" >&2
+    exit 1
+fi
 
-cp "${PROJECT_ROOT}/.build/release/CodexPulse" "${CONTENTS_PATH}/MacOS/CodexPulse"
-cp "${PROJECT_ROOT}/Resources/Info.plist" "${CONTENTS_PATH}/Info.plist"
-cp "${PROJECT_ROOT}/Sources/CodexPulseNative/Resources/"* "${CONTENTS_PATH}/Resources/Web/"
-touch "${APP_PATH}"
+mkdir -p "${APP_PATH:h}"
+if [[ -e "${APP_PATH}" ]]; then
+    rm -rf -- "${APP_PATH}"
+fi
+/usr/bin/ditto "${PACKAGED_APP}" "${APP_PATH}"
 
 echo "Built ${APP_PATH}"

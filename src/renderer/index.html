@@ -3,17 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Codex Pulse</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="shell">
     <header class="header" id="drag-region">
-      <div class="logo" aria-hidden="true">&gt;_</div>
+      <span class="health-dot" id="health-dot" aria-hidden="true"></span>
       <div class="heading">
         <h1>Codex Pulse</h1>
         <p id="subtitle">正在读取本机会话…</p>
       </div>
+      <span class="mode-badge" id="yolo-badge" hidden>YOLO</span>
       <button class="round-button" id="refresh-button" title="立即刷新" aria-label="立即刷新">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 11V5m0 6h-6"/></svg>
       </button>
@@ -24,6 +26,13 @@
             <span class="menu-copy"><strong>YOLO 模式</strong><small>跳过审批与沙箱</small></span>
             <span class="switch" aria-hidden="true"></span>
           </button>
+          <div class="menu-setting">
+            <strong id="session-title-mode-label">会话显示</strong>
+            <div class="menu-segmented" role="group" aria-labelledby="session-title-mode-label">
+              <button type="button" data-session-title-mode="prompt" aria-pressed="true">最后提问</button>
+              <button type="button" data-session-title-mode="title" aria-pressed="false">标题</button>
+            </div>
+          </div>
           <div class="menu-divider"></div>
           <button id="manage-remote-menu">管理远程服务器</button>
           <div class="menu-divider"></div>
@@ -33,54 +42,33 @@
       </div>
     </header>
 
-    <section class="yolo-banner" id="yolo-banner" hidden>
-      <span class="yolo-mark">!</span>
-      <span><strong>YOLO 已开启</strong> · 新打开的会话将跳过所有确认和沙箱</span>
-    </section>
-
-    <div class="source-area">
+    <div class="controls">
       <nav class="source-switch" aria-label="会话来源">
-        <button class="selected" data-source="local"><span class="source-dot local"></span>本地会话</button>
-        <button data-source="remote"><span class="source-dot remote"></span>远程服务器</button>
+        <button class="selected" data-source="local"><span class="source-dot local"></span>本地</button>
+        <button data-source="remote"><span class="source-dot remote"></span>远程</button>
       </nav>
 
       <section class="remote-toolbar" id="remote-toolbar" hidden>
-        <label><span>服务器</span><select id="remote-filter"><option value="all">全部服务器</option></select></label>
-        <button id="manage-remote-button">管理</button>
+        <select id="remote-filter" aria-label="远程服务器"><option value="all">全部服务器</option></select>
+        <button id="manage-remote-button" title="管理远程服务器" aria-label="管理远程服务器">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5"/></svg>
+        </button>
       </section>
+
+      <label class="search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        <input id="search-input" type="search" autocomplete="off" placeholder="搜索会话或项目">
+      </label>
     </div>
 
-    <section class="summary" aria-label="状态概览">
-      <button class="summary-card active" data-summary="active">
-        <span class="summary-icon">∿</span><strong id="count-active">0</strong><small>进行中</small>
-      </button>
-      <button class="summary-card completed-pending" data-summary="completed_pending">
-        <span class="summary-icon">◎</span><strong id="count-completed_pending">0</strong><small>完成待确认</small>
-      </button>
-      <button class="summary-card completed" data-summary="completed">
-        <span class="summary-icon">✓</span><strong id="count-completed">0</strong><small>已完成</small>
-      </button>
-      <button class="summary-card attention" data-summary="attention">
-        <span class="summary-icon">!</span><strong id="count-attention">0</strong><small>待确认</small>
-      </button>
-      <button class="summary-card failed" data-summary="failed">
-        <span class="summary-icon">×</span><strong id="count-failed">0</strong><small>失败</small>
-      </button>
-    </section>
-
     <nav class="tabs" aria-label="状态筛选">
-      <button class="selected" data-filter="all">全部</button>
-      <button data-filter="active">进行中</button>
-      <button data-filter="completed_pending">完成待确认</button>
-      <button data-filter="completed">已完成</button>
-      <button data-filter="attention">待确认</button>
-      <button data-filter="failed">失败</button>
+      <button class="selected" data-filter="all">全部 <span id="count-all">0</span></button>
+      <button data-filter="active">进行 <span id="count-active">0</span></button>
+      <button data-filter="completed_pending">新完成 <span id="count-completed_pending">0</span></button>
+      <button data-filter="attention">审批 <span id="count-attention">0</span></button>
+      <button data-filter="failed">失败 <span id="count-failed">0</span></button>
+      <button data-filter="completed">完成 <span id="count-completed">0</span></button>
     </nav>
-
-    <label class="search">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-      <input id="search-input" type="search" autocomplete="off" placeholder="搜索会话或项目">
-    </label>
 
     <main class="content" id="content">
       <div class="empty loading" id="empty-state">
@@ -92,16 +80,10 @@
       <div class="session-list" id="session-list"></div>
     </main>
 
-    <footer>
-      <span class="health-dot" id="health-dot"></span>
-      <span id="footer-label">每 2 秒同步 · 数据仅在本机读取</span>
-      <time id="refreshed-at"></time>
-    </footer>
-
     <div class="modal-backdrop" id="remote-modal" hidden>
       <section class="remote-dialog" role="dialog" aria-modal="true" aria-labelledby="remote-dialog-title">
         <header>
-          <div><strong id="remote-dialog-title">远程服务器</strong><small>通过 SSH 读取服务器上的 Codex 会话</small></div>
+          <div><strong id="remote-dialog-title">远程服务器</strong></div>
           <button id="remote-modal-close" aria-label="关闭">×</button>
         </header>
         <form id="remote-form">
@@ -113,7 +95,6 @@
         <div class="remote-host-list" id="remote-host-list"></div>
         <div class="remote-list-heading"><span>从 ~/.ssh/config 发现</span><button id="reload-ssh-hosts">重新读取</button></div>
         <div class="discovered-host-list" id="discovered-host-list"></div>
-        <p class="remote-hint">使用 ~/.ssh/config 中的别名或 user@host；端口和密钥沿用 SSH 配置。服务器需安装 python3。</p>
       </section>
     </div>
   </div>
