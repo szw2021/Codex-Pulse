@@ -81,6 +81,7 @@
     focusLimitTotal: document.querySelector('#focus-limit-total'),
     emptyAction: document.querySelector('#empty-action'),
     health: document.querySelector('#health-dot'),
+    sessionContextMenu: document.querySelector('#session-context-menu'),
   };
 
   const bridge = (action, details = {}) => window.codexPulse?.send(action, details);
@@ -467,7 +468,7 @@
     row.dataset.state = session.state;
     row.addEventListener('contextmenu', event => {
       event.preventDefault();
-      bridge('showSessionMenu', { id: session.id });
+      openSessionContextMenu(session, event.clientX, event.clientY);
     });
 
     const top = document.createElement('div');
@@ -596,6 +597,85 @@
     }
     row.append(top, actions);
     return row;
+  }
+
+  function closeSessionContextMenu() {
+    elements.sessionContextMenu.hidden = true;
+    elements.sessionContextMenu.replaceChildren();
+  }
+
+  function openSessionContextMenu(session, clientX, clientY) {
+    const remote = session.source === 'remote';
+    const writerActive = Number.isInteger(session.pid) && session.pid > 0;
+    const resumeBlocked = writerActive || session.state === 'active' || session.state === 'attention';
+    const deletionBlocked = resumeBlocked;
+    const owner = session.writerOwner || (remote ? '远程终端' : '终端');
+    const items = [];
+    const addAction = (label, action, options = {}) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.disabled = Boolean(options.disabled);
+      button.classList.toggle('danger', Boolean(options.danger));
+      if (!button.disabled) {
+        button.addEventListener('click', () => {
+          closeSessionContextMenu();
+          action();
+        });
+      }
+      items.push(button);
+    };
+    const addSeparator = () => {
+      const separatorElement = document.createElement('div');
+      separatorElement.className = 'session-context-separator';
+      separatorElement.setAttribute('role', 'separator');
+      items.push(separatorElement);
+    };
+
+    if (remote) {
+      addAction(resumeBlocked ? `会话已在${owner}运行` : '通过 SSH 继续', () => {
+        bridge('remoteResume', { id: session.id });
+      }, { disabled: resumeBlocked });
+      addAction('复制继续命令', () => bridge('remoteCopy', { id: session.id }), {
+        disabled: resumeBlocked,
+      });
+      addAction('连接服务器', () => bridge('remoteConnect', { host: session.remoteHost }));
+      if (writerActive) {
+        addAction('结束原进程并继续…', () => {
+          const tty = session.writerTty ? ` · ${session.writerTty}` : '';
+          const confirmed = window.confirm(
+            `这个会话仍在${owner}中运行\n\nPID ${session.pid}${tty}。继续会停止原会话及其正在执行的工具，未完成的工作可能会中断。`,
+          );
+          if (confirmed) bridge('terminateRemote', { id: session.id });
+        });
+      }
+    } else {
+      addAction(resumeBlocked ? `会话已在${owner}运行` : '在终端中继续', () => {
+        bridge('resume', { id: session.id });
+      }, { disabled: resumeBlocked });
+      addAction('复制继续命令', () => bridge('copy', { id: session.id }), {
+        disabled: resumeBlocked,
+      });
+      addAction('在 Finder 中显示项目', () => bridge('reveal', { id: session.id }), {
+        disabled: !session.cwd,
+      });
+    }
+    addSeparator();
+    addAction('重命名…', () => openRenameModal({
+      id: session.id,
+      currentName: session.title || session.lastPrompt || '',
+    }));
+    addAction(deletionBlocked ? '运行中不可删除' : '删除会话…', () => {
+      const confirmed = window.confirm('确定删除这个会话吗？\n\n会话会被归档并从列表中移除，原始会话日志不会被删除。');
+      if (confirmed) bridge('archiveSession', { id: session.id });
+    }, { disabled: deletionBlocked, danger: !deletionBlocked });
+
+    elements.menu.hidden = true;
+    elements.sessionContextMenu.replaceChildren(...items);
+    elements.sessionContextMenu.hidden = false;
+    const bounds = elements.sessionContextMenu.getBoundingClientRect();
+    elements.sessionContextMenu.style.left = `${Math.max(6, Math.min(clientX, window.innerWidth - bounds.width - 6))}px`;
+    elements.sessionContextMenu.style.top = `${Math.max(6, Math.min(clientY, window.innerHeight - bounds.height - 6))}px`;
   }
 
   function separator() {
@@ -802,12 +882,19 @@
   });
   elements.menuButton.addEventListener('click', event => {
     event.stopPropagation();
+    closeSessionContextMenu();
     elements.menu.hidden = !elements.menu.hidden;
   });
-  document.addEventListener('click', () => { elements.menu.hidden = true; });
+  elements.sessionContextMenu.addEventListener('click', event => event.stopPropagation());
+  elements.list.addEventListener('scroll', closeSessionContextMenu);
+  document.addEventListener('click', () => {
+    elements.menu.hidden = true;
+    closeSessionContextMenu();
+  });
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
-    if (!elements.displaySettingsModal.hidden) closeDisplaySettings();
+    if (!elements.sessionContextMenu.hidden) closeSessionContextMenu();
+    else if (!elements.displaySettingsModal.hidden) closeDisplaySettings();
     else if (!elements.renameModal.hidden) closeRenameModal();
     else if (!elements.remoteModal.hidden) closeRemoteModal();
   });
@@ -817,6 +904,7 @@
   window.codexPulse?.onState(receive);
   window.codexPulse?.onCommand(payload => {
     if (payload?.action === 'renameSession') openRenameModal(payload);
+    else if (payload?.action === 'error') window.alert(payload.message || '操作失败');
   });
   bridge('ready');
 })();
