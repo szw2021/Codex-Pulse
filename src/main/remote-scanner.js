@@ -36,6 +36,28 @@ function parseRemoteRoot(data) {
   }
 }
 
+function parseRemoteResult(data) {
+  const text = Buffer.isBuffer(data) ? data.toString('utf8') : String(data || '');
+  try {
+    return JSON.parse(text);
+  } catch {
+    const lines = text.split(/\r?\n/u);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      try {
+        const candidate = JSON.parse(lines[index]);
+        if (candidate && typeof candidate === 'object') return candidate;
+      } catch {
+        // Remote login banners may precede the final JSON result.
+      }
+    }
+    return null;
+  }
+}
+
+function encodeRemoteArgument(value) {
+  return Buffer.from(String(value), 'utf8').toString('base64url');
+}
+
 function sessionsFromJsonData(data, host) {
   const root = parseRemoteRoot(data);
   const items = Array.isArray(root) ? root : root?.sessions;
@@ -53,6 +75,9 @@ function sessionsFromJsonData(data, host) {
       || title
       || `Codex 会话 ${shortId}`;
     const state = cleanString(item.state) || 'completed';
+    const pid = Number.isInteger(item.pid) && item.pid > 0 ? item.pid : undefined;
+    const writerOwner = cleanString(item.writerOwner, 80) || undefined;
+    const writerTty = cleanString(item.writerTty, 40) || undefined;
     const session = {
       ...item,
       remoteSessionId,
@@ -67,6 +92,9 @@ function sessionsFromJsonData(data, host) {
       state,
       detail: cleanString(item.detail) || '远程会话',
       updatedAt: typeof item.updatedAt === 'number' ? item.updatedAt : Date.now(),
+      pid,
+      writerOwner,
+      writerTty,
     };
     delete session.completionToken;
     const completionToken = cleanString(item.completionToken);
@@ -191,6 +219,33 @@ class RemoteScanner {
   }
 
   async scanHost(host) {
+    const output = await this.runScript(host);
+    return sessionsFromJsonData(output, host);
+  }
+
+  async manageSession(host, action, sessionId, value = '') {
+    if (action !== 'rename' && action !== 'archive' && action !== 'terminate') {
+      throw new Error('远程会话操作无效');
+    }
+    const id = cleanString(sessionId, 200);
+    const name = action === 'rename' ? cleanString(value, 100) : '';
+    const expectedPid = action === 'terminate' ? Number(value) : null;
+    if (!id) throw new Error('远程会话 ID 无效');
+    if (action === 'rename' && !name) throw new Error('会话名称不能为空');
+    if (action === 'terminate' && (!Number.isInteger(expectedPid) || expectedPid <= 0)) {
+      throw new Error('占用进程 PID 无效');
+    }
+    const output = await this.runScript(host, [
+      action,
+      encodeRemoteArgument(id),
+      encodeRemoteArgument(action === 'terminate' ? expectedPid : name || ''),
+    ]);
+    const result = parseRemoteResult(output);
+    if (!result?.ok) throw new Error(cleanString(result?.error) || '远程会话操作失败');
+    return result;
+  }
+
+  async runScript(host, args = []) {
     if (!isValidHost(host)) throw new Error('SSH 主机名格式无效');
     if (!this.script) {
       try {
@@ -209,6 +264,7 @@ class RemoteScanner {
         host,
         'python3',
         '-',
+        ...args,
       ], { stdio: ['pipe', 'pipe', 'pipe'] });
       const stdout = [];
       const stderr = [];
@@ -247,11 +303,7 @@ class RemoteScanner {
           reject(new Error(message));
           return;
         }
-        try {
-          resolve(sessionsFromJsonData(output, host));
-        } catch (error) {
-          reject(error);
-        }
+        resolve(output);
       });
       child.stdin.on('error', () => {});
       child.stdin.end(this.script);

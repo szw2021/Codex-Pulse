@@ -1,7 +1,9 @@
 import atexit
+import base64
 import datetime
 import json
 import os
+import signal
 import shutil
 import sqlite3
 import subprocess
@@ -64,6 +66,16 @@ def prompt_from_record(record):
     return clean(text)
 
 
+def decode_argument(value):
+    if not isinstance(value, str):
+        return ""
+    padding = "=" * (-len(value) % 4)
+    try:
+        return base64.urlsafe_b64decode((value + padding).encode("ascii")).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return ""
+
+
 def latest_prompt(path):
     try:
         with open(path, "rb") as handle:
@@ -90,6 +102,8 @@ def process_snapshot(sessions_root):
     active_paths = {}
     children = {}
     commands = {}
+    parents = {}
+    ttys = {}
     proc_root = "/proc"
     if not os.path.isdir(proc_root):
         try:
@@ -105,11 +119,28 @@ def process_snapshot(sessions_root):
                     active_paths[os.path.realpath(line[1:])] = pid
         except (OSError, ValueError, subprocess.SubprocessError):
             pass
-        return active_paths, children, commands
+        try:
+            output = subprocess.run(
+                ["ps", "-axo", "pid=,ppid=,tty=,command="],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=5
+            ).stdout
+            for line in output.splitlines():
+                fields = line.strip().split(None, 3)
+                if len(fields) < 4:
+                    continue
+                pid = int(fields[0])
+                parent = int(fields[1])
+                children.setdefault(parent, []).append(pid)
+                parents[pid] = parent
+                ttys[pid] = fields[2]
+                commands[pid] = fields[3]
+        except (OSError, ValueError, subprocess.SubprocessError):
+            pass
+        return active_paths, children, commands, parents, ttys
     try:
         process_ids = [name for name in os.listdir(proc_root) if name.isdigit()]
     except OSError:
-        return active_paths, children, commands
+        return active_paths, children, commands, parents, ttys
     for name in process_ids:
         pid = int(name)
         try:
@@ -120,10 +151,22 @@ def process_snapshot(sessions_root):
             parent = int(fields[1])
             command = stat[stat.find("(") + 1:close]
             children.setdefault(parent, []).append(pid)
-            commands[pid] = command
+            parents[pid] = parent
+            try:
+                with open(os.path.join(proc_root, name, "cmdline"), "rb") as handle:
+                    command_line = handle.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+                commands[pid] = command_line or command
+            except OSError:
+                commands[pid] = command
         except (OSError, ValueError, IndexError):
             pass
         fd_root = os.path.join(proc_root, name, "fd")
+        try:
+            tty = os.path.realpath(os.path.join(fd_root, "0"))
+            if tty.startswith("/dev/"):
+                ttys[pid] = tty[5:]
+        except OSError:
+            pass
         try:
             for fd in os.listdir(fd_root):
                 try:
@@ -134,7 +177,39 @@ def process_snapshot(sessions_root):
                     pass
         except OSError:
             pass
-    return active_paths, children, commands
+    return active_paths, children, commands, parents, ttys
+
+
+def writer_context(pid, parents, commands, ttys):
+    current = pid
+    seen = set()
+    tty = None
+    owner = None
+    while current and current not in seen and len(seen) < 16:
+        seen.add(current)
+        command = commands.get(current, "")
+        lowered = command.lower()
+        candidate_tty = ttys.get(current)
+        if not tty and candidate_tty not in (None, "?", "??", "-"):
+            tty = candidate_tty
+        if ".vscode-server" in lowered or "ptyhost" in lowered:
+            owner = "VS Code 远程终端"
+            break
+        if ".cursor-server" in lowered:
+            owner = "Cursor 远程终端"
+            break
+        if "tmux" in lowered:
+            owner = "tmux"
+            break
+        if "screen" in lowered:
+            owner = "screen"
+            break
+        if "sshd:" in lowered:
+            owner = "SSH 终端"
+        current = parents.get(current)
+    if owner is None:
+        owner = "远程终端"
+    return owner, tty
 
 
 def has_working_child(pid, children, commands):
@@ -302,11 +377,118 @@ def open_database(database_path):
         ) from snapshot_error
 
 
+def terminate_session(database_path, sessions_root, session_id, encoded_pid):
+    try:
+        expected_pid = int(decode_argument(encoded_pid))
+    except ValueError as exc:
+        raise ValueError("占用进程 PID 无效") from exc
+    if expected_pid <= 0:
+        raise ValueError("占用进程 PID 无效")
+
+    connection = open_database(database_path)
+    try:
+        row = connection.execute(
+            "SELECT rollout_path FROM threads WHERE id = ?", (session_id,)
+        ).fetchone()
+    finally:
+        connection.close()
+    if row is None or not row[0]:
+        raise ValueError("未找到指定会话")
+    rollout_path = os.path.realpath(os.path.abspath(os.path.expanduser(row[0])))
+    active_paths, children, commands, parents, ttys = process_snapshot(sessions_root)
+    active_pid = active_paths.get(rollout_path)
+    if active_pid is None:
+        print(json.dumps(
+            {"ok": True, "action": "terminate", "alreadyStopped": True},
+            ensure_ascii=False, separators=(",", ":")
+        ))
+        return
+    if active_pid != expected_pid:
+        raise ValueError("占用进程已经变化，请刷新后重试")
+    if "codex" not in commands.get(active_pid, "").lower():
+        raise ValueError("占用该会话的进程不是可确认的 Codex 进程")
+
+    owner, tty = writer_context(active_pid, parents, commands, ttys)
+    os.kill(active_pid, signal.SIGTERM)
+    deadline = time.monotonic() + 4
+    while time.monotonic() < deadline:
+        try:
+            os.kill(active_pid, 0)
+        except ProcessLookupError:
+            break
+        except PermissionError as exc:
+            raise ValueError("没有权限结束远程 Codex 进程") from exc
+        time.sleep(0.1)
+    else:
+        raise ValueError("原 Codex 进程未在超时内退出，请回到原终端手动结束")
+
+    remaining_paths, _, _, _, _ = process_snapshot(sessions_root)
+    if rollout_path in remaining_paths:
+        raise ValueError("会话仍被另一个 Codex 进程占用，请刷新后重试")
+    result = {"ok": True, "action": "terminate", "pid": active_pid, "owner": owner}
+    if tty:
+        result["tty"] = tty
+    print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+
+
+def manage_session(database_path, sessions_root, action, encoded_id, encoded_value=""):
+    session_id = clean(decode_argument(encoded_id), 200)
+    if not session_id:
+        raise ValueError("会话 ID 无效")
+    if action == "terminate":
+        terminate_session(database_path, sessions_root, session_id, encoded_value)
+        return
+    connection = sqlite3.connect(database_path, timeout=2)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(threads)").fetchall()}
+        if action == "rename":
+            name = clean(decode_argument(encoded_value), 100)
+            if not name:
+                raise ValueError("会话名称不能为空")
+            column = "name" if "name" in columns else "title" if "title" in columns else None
+            if column is None:
+                raise ValueError("当前 Codex 数据库不支持会话重命名")
+            cursor = connection.execute(
+                'UPDATE threads SET "{}" = ? WHERE id = ?'.format(column),
+                (name, session_id),
+            )
+        elif action == "archive":
+            if "archived" not in columns:
+                raise ValueError("当前 Codex 数据库不支持删除会话")
+            if "archived_at" in columns:
+                cursor = connection.execute(
+                    "UPDATE threads SET archived = 1, archived_at = ? WHERE id = ?",
+                    (int(time.time()), session_id),
+                )
+            else:
+                cursor = connection.execute(
+                    "UPDATE threads SET archived = 1 WHERE id = ?",
+                    (session_id,),
+                )
+        else:
+            raise ValueError("远程会话操作无效")
+        if cursor.rowcount != 1:
+            raise ValueError("未找到指定会话")
+        connection.commit()
+        print(json.dumps({"ok": True, "action": action}, ensure_ascii=False, separators=(",", ":")))
+    finally:
+        connection.close()
+
+
 def main():
     codex_home = os.path.abspath(os.path.expanduser(os.environ.get("CODEX_HOME", "~/.codex")))
     database_path = os.path.join(codex_home, "state_5.sqlite")
     sessions_root = os.path.join(codex_home, "sessions")
-    active_paths, children, commands = process_snapshot(sessions_root)
+    if len(sys.argv) > 1:
+        manage_session(
+            database_path,
+            sessions_root,
+            sys.argv[1],
+            sys.argv[2] if len(sys.argv) > 2 else "",
+            sys.argv[3] if len(sys.argv) > 3 else "",
+        )
+        return
+    active_paths, children, commands, parents, ttys = process_snapshot(sessions_root)
     connection = open_database(database_path)
     connection.row_factory = sqlite3.Row
     columns = {row[1] for row in connection.execute("PRAGMA table_info(threads)").fetchall()}
@@ -366,6 +548,10 @@ def main():
             item["model"] = row["model"]
         if pid:
             item["pid"] = pid
+            owner, tty = writer_context(pid, parents, commands, ttys)
+            item["writerOwner"] = owner
+            if tty:
+                item["writerTty"] = tty
         if completion_token:
             item["completionToken"] = completion_token
         sessions.append(item)

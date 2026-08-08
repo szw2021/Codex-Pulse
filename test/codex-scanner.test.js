@@ -1,8 +1,10 @@
 const assert = require('node:assert/strict');
+const { execFile } = require('node:child_process');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { promisify } = require('node:util');
 const {
   CodexScanner,
   detectStateInData,
@@ -10,6 +12,7 @@ const {
 } = require('../src/main/codex-scanner');
 
 const NOW = 2_000_000_000_000;
+const executeFile = promisify(execFile);
 
 function jsonLine(outerType, payload, secondsAgo) {
   return JSON.stringify({
@@ -130,17 +133,52 @@ test('falls back to a temporary SQLite snapshot when direct reads fail', async (
   await fs.writeFile(`${databasePath}-wal`, 'wal');
   const scanner = new CodexScanner(root);
   let snapshotRoot = null;
-  scanner.queryJsonDirect = async (candidatePath) => {
-    if (candidatePath === databasePath) throw new Error('direct read failed');
+  let directAttempts = 0;
+  scanner.queryJsonDirect = async (candidatePath, _sql, options) => {
+    if (candidatePath === databasePath) {
+      directAttempts += 1;
+      throw new Error('direct read failed');
+    }
     snapshotRoot = path.dirname(candidatePath);
+    assert.equal(options.readOnly, false);
     assert.equal(await fs.readFile(candidatePath, 'utf8'), 'database');
     assert.equal(await fs.readFile(`${candidatePath}-wal`, 'utf8'), 'wal');
     return [{ ok: 1 }];
   };
 
   assert.deepEqual(await scanner.queryJson(databasePath, 'SELECT 1'), [{ ok: 1 }]);
+  assert.equal(directAttempts, 2);
   await assert.rejects(fs.access(snapshotRoot));
   await fs.rm(root, { recursive: true, force: true });
+});
+
+test('renames and archives local sessions through the Codex database', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-pulse-manage-'));
+  const databasePath = path.join(root, 'state_5.sqlite');
+  try {
+    await executeFile('/usr/bin/sqlite3', [databasePath, [
+      'CREATE TABLE threads (',
+      'id TEXT PRIMARY KEY, title TEXT, name TEXT, archived INTEGER DEFAULT 0, archived_at INTEGER);',
+      "INSERT INTO threads (id, title) VALUES ('session-1', '原始标题');",
+    ].join(' ')]);
+    const scanner = new CodexScanner(root);
+
+    assert.equal(await scanner.renameSession('session-1', '新的会话名称'), '新的会话名称');
+    let result = await executeFile('/usr/bin/sqlite3', [
+      '-json', databasePath,
+      "SELECT name, archived FROM threads WHERE id = 'session-1';",
+    ]);
+    assert.deepEqual(JSON.parse(result.stdout), [{ name: '新的会话名称', archived: 0 }]);
+
+    await scanner.archiveSession('session-1');
+    result = await executeFile('/usr/bin/sqlite3', [
+      '-json', databasePath,
+      "SELECT archived, archived_at > 0 AS has_archived_at FROM threads WHERE id = 'session-1';",
+    ]);
+    assert.deepEqual(JSON.parse(result.stdout), [{ archived: 1, has_archived_at: 1 }]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test('scans the installed Codex database when available', { timeout: 60_000 }, async (t) => {

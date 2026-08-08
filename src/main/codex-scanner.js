@@ -6,6 +6,8 @@ const { execFile } = require('node:child_process');
 const MAX_TAIL_BYTES = 512 * 1024;
 const PROMPT_CHUNK_BYTES = 256 * 1024;
 const SQLITE3_PATH = process.env.CODEX_PULSE_SQLITE3 || '/usr/bin/sqlite3';
+const DATABASE_READ_RETRIES = 2;
+const SNAPSHOT_RETRIES = 3;
 
 function cleanString(value, limit = 500) {
   if (typeof value !== 'string') return null;
@@ -18,6 +20,10 @@ function cleanTitle(value, fallbackId) {
   const clean = cleanString(value, 100);
   if (!clean || clean === fallbackId) return `Codex 会话 ${fallbackId.slice(0, 8)}`;
   return clean;
+}
+
+function sqlText(value) {
+  return `CAST(X'${Buffer.from(String(value), 'utf8').toString('hex')}' AS TEXT)`;
 }
 
 function parseTimestamp(value) {
@@ -353,6 +359,40 @@ function expandHome(value) {
   return value;
 }
 
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function fileFingerprint(filePath) {
+  try {
+    const attributes = await fs.stat(filePath);
+    return `${attributes.ino}:${attributes.size}:${attributes.mtimeMs}`;
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+async function copyDatabaseSnapshot(databasePath, snapshotPath) {
+  const walPath = `${databasePath}-wal`;
+  const snapshotWalPath = `${snapshotPath}-wal`;
+  const before = await Promise.all([
+    fileFingerprint(databasePath),
+    fileFingerprint(walPath),
+  ]);
+  await fs.copyFile(databasePath, snapshotPath);
+  if (before[1]) await fs.copyFile(walPath, snapshotWalPath);
+  const after = await Promise.all([
+    fileFingerprint(databasePath),
+    fileFingerprint(walPath),
+  ]);
+  if (before[0] !== after[0] || before[1] !== after[1]) {
+    const error = new Error('Codex 状态数据库在创建快照时发生变化');
+    error.code = 'EBUSY';
+    throw error;
+  }
+}
+
 class CodexScanner {
   constructor(codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')) {
     this.codexHome = path.resolve(expandHome(codexHome));
@@ -362,34 +402,54 @@ class CodexScanner {
   }
 
   async queryJson(databasePath, sql) {
-    try {
-      return await this.queryJsonDirect(databasePath, sql);
-    } catch (directError) {
+    let directError = null;
+    for (let attempt = 0; attempt < DATABASE_READ_RETRIES; attempt += 1) {
+      try {
+        return await this.queryJsonDirect(databasePath, sql);
+      } catch (error) {
+        directError = error;
+        if (attempt + 1 < DATABASE_READ_RETRIES) await delay(50);
+      }
+    }
+
+    let snapshotError = directError;
+    for (let attempt = 0; attempt < SNAPSHOT_RETRIES; attempt += 1) {
       const snapshotRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'codex-pulse-db-'));
       const snapshotPath = path.join(snapshotRoot, path.basename(databasePath));
       try {
-        await fs.copyFile(databasePath, snapshotPath);
-        for (const suffix of ['-wal']) {
-          try {
-            await fs.copyFile(`${databasePath}${suffix}`, `${snapshotPath}${suffix}`);
-          } catch (error) {
-            if (error.code !== 'ENOENT') throw error;
-          }
-        }
-        return await this.queryJsonDirect(snapshotPath, sql);
-      } catch (snapshotError) {
-        snapshotError.cause = directError;
-        throw snapshotError;
+        await copyDatabaseSnapshot(databasePath, snapshotPath);
+        return await this.queryJsonDirect(snapshotPath, sql, { readOnly: false });
+      } catch (error) {
+        snapshotError = error;
       } finally {
         await fs.rm(snapshotRoot, { recursive: true, force: true });
       }
+      if (attempt + 1 < SNAPSHOT_RETRIES) await delay(50);
     }
+    snapshotError.cause = directError;
+    throw snapshotError;
   }
 
-  async queryJsonDirect(databasePath, sql) {
-    const output = await executeFile(SQLITE3_PATH, [
-      '-readonly',
+  async queryJsonDirect(databasePath, sql, { readOnly = true } = {}) {
+    const args = [
       '-cmd', '.timeout 1000',
+    ];
+    if (readOnly) args.unshift('-readonly');
+    else args.push('-cmd', 'PRAGMA query_only=ON;');
+    args.push(
+      '-json',
+      databasePath,
+      sql,
+    );
+    const output = await executeFile(SQLITE3_PATH, args);
+    if (!output.trim()) return [];
+    const parsed = JSON.parse(output);
+    return Array.isArray(parsed) ? parsed : [];
+  }
+
+  async writeJson(databasePath, sql) {
+    const output = await executeFile(SQLITE3_PATH, [
+      '-cmd', '.timeout 2000',
       '-json',
       databasePath,
       sql,
@@ -397,6 +457,37 @@ class CodexScanner {
     if (!output.trim()) return [];
     const parsed = JSON.parse(output);
     return Array.isArray(parsed) ? parsed : [];
+  }
+
+  async renameSession(sessionId, value) {
+    const id = cleanString(sessionId, 200);
+    const name = cleanString(value, 100);
+    if (!id || !name) throw new Error('会话名称不能为空');
+    const databasePath = path.join(this.codexHome, 'state_5.sqlite');
+    const columns = await this.threadColumns(databasePath);
+    const column = columns.has('name') ? 'name' : columns.has('title') ? 'title' : null;
+    if (!column) throw new Error('当前 Codex 数据库不支持会话重命名');
+    const rows = await this.writeJson(databasePath, [
+      `UPDATE threads SET "${column}" = ${sqlText(name)} WHERE "id" = ${sqlText(id)};`,
+      'SELECT changes() AS changed;',
+    ].join(' '));
+    if (Number(rows.at(-1)?.changed) !== 1) throw new Error('未找到要重命名的会话');
+    return name;
+  }
+
+  async archiveSession(sessionId) {
+    const id = cleanString(sessionId, 200);
+    if (!id) throw new Error('会话 ID 无效');
+    const databasePath = path.join(this.codexHome, 'state_5.sqlite');
+    const columns = await this.threadColumns(databasePath);
+    if (!columns.has('archived')) throw new Error('当前 Codex 数据库不支持删除会话');
+    const assignments = ['"archived" = 1'];
+    if (columns.has('archived_at')) assignments.push(`"archived_at" = ${Math.floor(Date.now() / 1000)}`);
+    const rows = await this.writeJson(databasePath, [
+      `UPDATE threads SET ${assignments.join(', ')} WHERE "id" = ${sqlText(id)};`,
+      'SELECT changes() AS changed;',
+    ].join(' '));
+    if (Number(rows.at(-1)?.changed) !== 1) throw new Error('未找到要删除的会话');
   }
 
   async threadColumns(databasePath) {

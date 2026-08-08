@@ -1,9 +1,9 @@
 const STATE_PRIORITY = new Map([
-  ['active', 0],
-  ['completed_pending', 1],
-  ['completed', 2],
-  ['attention', 3],
-  ['failed', 4],
+  ['attention', 0],
+  ['active', 1],
+  ['completed_pending', 2],
+  ['failed', 3],
+  ['completed', 4],
 ]);
 
 function sessionsByApplyingCompletionTracking(

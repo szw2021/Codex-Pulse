@@ -2,17 +2,22 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 const ACTION_CHANNEL = 'codex-pulse:action';
 const STATE_CHANNEL = 'codex-pulse:state';
+const COMMAND_CHANNEL = 'codex-pulse:command';
 const allowedActions = new Set([
   'ready',
   'refresh',
-  'refreshRemote',
   'reloadSSHHosts',
-  'setSource',
   'addRemoteHost',
   'removeRemoteHost',
   'remoteConnect',
   'setYolo',
+  'setWindowPinned',
   'setSessionTitleMode',
+  'setDisplayPreferences',
+  'setWindowHeight',
+  'showSessionMenu',
+  'renameSession',
+  'minimize',
   'hide',
   'quit',
   'resume',
@@ -36,5 +41,11 @@ contextBridge.exposeInMainWorld('codexPulse', Object.freeze({
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on(STATE_CHANNEL, listener);
     return () => ipcRenderer.removeListener(STATE_CHANNEL, listener);
+  },
+  onCommand(callback) {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on(COMMAND_CHANNEL, listener);
+    return () => ipcRenderer.removeListener(COMMAND_CHANNEL, listener);
   },
 }));

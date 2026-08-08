@@ -15,8 +15,19 @@ function resumeCommandForSession(session, yoloEnabled = false) {
 
 function remoteResumeCommandForSession(session, yoloEnabled = false) {
   const modeFlag = yoloEnabled ? ' --dangerously-bypass-approvals-and-sandbox' : '';
-  const remoteCommand = `cd ${shellQuote(session?.cwd)} && codex resume${modeFlag} ${shellQuote(session?.remoteSessionId)}`;
+  const codexPath = 'PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$HOME/.codex/packages/standalone/current:$PATH"';
+  const remoteCommand = `cd ${shellQuote(session?.cwd)} && ${codexPath} codex resume${modeFlag} ${shellQuote(session?.remoteSessionId)}`;
   return `ssh -t ${shellQuote(session?.remoteHost)} ${shellQuote(remoteCommand)}`;
+}
+
+function sessionHasActiveWriter(session) {
+  return Number.isInteger(session?.pid) && session.pid > 0;
+}
+
+function sessionResumeBlocked(session) {
+  return sessionHasActiveWriter(session)
+    || session?.state === 'active'
+    || session?.state === 'attention';
 }
 
 function launchTerminalCommand(command) {
@@ -33,5 +44,7 @@ module.exports = {
   launchTerminalCommand,
   remoteResumeCommandForSession,
   resumeCommandForSession,
+  sessionHasActiveWriter,
+  sessionResumeBlocked,
   shellQuote,
 };

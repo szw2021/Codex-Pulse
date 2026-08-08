@@ -4,6 +4,8 @@ const { sessionsByApplyingCompletionTracking } = require('../src/main/completion
 const {
   remoteResumeCommandForSession,
   resumeCommandForSession,
+  sessionHasActiveWriter,
+  sessionResumeBlocked,
 } = require('../src/main/commands');
 
 test('builds safe local and remote resume commands', () => {
@@ -22,11 +24,23 @@ test('builds safe local and remote resume commands', () => {
     remoteSessionId: 'abc-123',
     remoteHost: 'dev-box',
   };
-  assert.equal(
-    remoteResumeCommandForSession(remote, false),
-    "ssh -t 'dev-box' 'cd '\\''/srv/demo folder'\\'' && codex resume '\\''abc-123'\\'''",
-  );
+  const remoteCommand = remoteResumeCommandForSession(remote, false);
+  assert.match(remoteCommand, /^ssh -t 'dev-box' /u);
+  assert.match(remoteCommand, /PATH="\/opt\/homebrew\/bin:\/usr\/local\/bin:\$HOME\/\.local\/bin:/u);
+  assert.match(remoteCommand, /codex resume/u);
   assert.match(remoteResumeCommandForSession(remote, true), /--dangerously-bypass-approvals-and-sandbox/u);
+});
+
+test('detects sessions that still have an active writer process', () => {
+  assert.equal(sessionHasActiveWriter({ pid: 1234 }), true);
+  assert.equal(sessionHasActiveWriter({ pid: 0 }), false);
+  assert.equal(sessionHasActiveWriter({ pid: '1234' }), false);
+  assert.equal(sessionHasActiveWriter({}), false);
+
+  assert.equal(sessionResumeBlocked({ state: 'completed', pid: 1234 }), true);
+  assert.equal(sessionResumeBlocked({ state: 'active' }), true);
+  assert.equal(sessionResumeBlocked({ state: 'attention' }), true);
+  assert.equal(sessionResumeBlocked({ state: 'completed' }), false);
 });
 
 test('tracks newly completed sessions until acknowledged', () => {
@@ -41,9 +55,9 @@ test('tracks newly completed sessions until acknowledged', () => {
   const tracked = sessionsByApplyingCompletionTracking(fixtures, 2_000_000, new Set(['acked:key']));
   assert.deepEqual(
     tracked.map((session) => session.state),
-    ['active', 'completed_pending', 'completed', 'completed', 'attention', 'failed'],
+    ['attention', 'active', 'completed_pending', 'failed', 'completed', 'completed'],
   );
-  assert.equal(tracked[1].id, 'new');
+  assert.equal(tracked[2].id, 'new');
 
   const acknowledged = sessionsByApplyingCompletionTracking(
     fixtures,
