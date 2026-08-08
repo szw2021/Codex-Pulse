@@ -10,12 +10,12 @@
 <body>
   <div class="shell">
     <header class="header" id="drag-region" data-tauri-drag-region>
-      <span class="health-dot" id="health-dot" aria-hidden="true"></span>
-      <div class="heading">
-        <h1>Codex Pulse</h1>
-        <p id="subtitle">正在读取本机会话…</p>
+      <span class="health-dot" id="health-dot" aria-hidden="true" data-tauri-drag-region></span>
+      <div class="heading" data-tauri-drag-region>
+        <h1 data-tauri-drag-region>Codex Pulse</h1>
+        <p id="subtitle" data-tauri-drag-region>正在读取本机会话…</p>
       </div>
-      <span class="mode-badge" id="yolo-badge" hidden>YOLO</span>
+      <span class="mode-badge" id="yolo-badge" hidden data-tauri-drag-region>YOLO</span>
       <button class="round-button" id="refresh-button" title="立即刷新" aria-label="立即刷新">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66M20 11V5m0 6h-6"/></svg>
       </button>

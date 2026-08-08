@@ -25,6 +25,11 @@
     completed_pending: 3,
     failed: 1,
   };
+  const displayLimitPayloadKeys = {
+    active: 'active',
+    completed_pending: 'completedPending',
+    failed: 'failed',
+  };
   const displayLimitKeys = Object.keys(defaultDisplayLimits);
   const listChromeHeight = 77;
   const focusGroupChromeHeight = 3 * 22;
@@ -170,7 +175,10 @@
       : {};
     appState.displayLimits = Object.fromEntries(displayLimitKeys.map(key => [
       key,
-      normalizeDisplayLimit(receivedLimits[key], defaultDisplayLimits[key]),
+      normalizeDisplayLimit(
+        receivedLimits[key] ?? receivedLimits[displayLimitPayloadKeys[key]],
+        defaultDisplayLimits[key],
+      ),
     ]));
     appState.titleLines = payload.titleLines === 2 ? 2 : 1;
     elements.reloadSSHHosts.textContent = '重新读取';

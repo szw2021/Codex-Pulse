@@ -15,7 +15,11 @@
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+  -webkit-user-select: none;
+  user-select: none;
+}
 
 html, body {
   width: 100%;
@@ -23,12 +27,15 @@ html, body {
   margin: 0;
   overflow: hidden;
   background: transparent;
-  user-select: none;
 }
 
 button, input, select { font: inherit; }
 button { color: inherit; }
 button, input, select, .menu, .session-context-menu, .modal-backdrop { -webkit-app-region: no-drag; }
+input, textarea, [contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
 
 .shell {
   position: relative;
@@ -341,7 +348,6 @@ button, input, select, .menu, .session-context-menu, .modal-backdrop { -webkit-a
   font-weight: 620;
   line-height: 15px;
   letter-spacing: 0;
-  user-select: text;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }

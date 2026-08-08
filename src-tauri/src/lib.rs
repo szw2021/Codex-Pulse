@@ -71,12 +71,7 @@ async fn handle_action(
         "setDisplayPreferences" => {
             let limits = payload.get("displayLimits").cloned().unwrap_or(Value::Null);
             state.set_display_preferences(
-                DisplayLimits {
-                    active: number_field(&limits, "active").unwrap_or(4) as u8,
-                    completed_pending: number_field(&limits, "completed_pending").unwrap_or(3)
-                        as u8,
-                    failed: number_field(&limits, "failed").unwrap_or(1) as u8,
-                },
+                display_limits_from_payload(&limits),
                 number_field(&payload, "titleLines").unwrap_or(1) as u8,
             )?;
             state.publish(&app);
@@ -192,6 +187,21 @@ fn number_field(payload: &Value, key: &str) -> Option<i64> {
             .as_i64()
             .or_else(|| value.as_f64().map(|number| number as i64))
     })
+}
+
+fn display_limits_from_payload(payload: &Value) -> DisplayLimits {
+    fn limit(payload: &Value, keys: &[&str], fallback: u8) -> u8 {
+        keys.iter()
+            .find_map(|key| number_field(payload, key))
+            .and_then(|value| u8::try_from(value).ok())
+            .unwrap_or(fallback)
+    }
+
+    DisplayLimits {
+        active: limit(payload, &["active"], 4),
+        completed_pending: limit(payload, &["completed_pending", "completedPending"], 3),
+        failed: limit(payload, &["failed"], 1),
+    }
 }
 
 fn apply_window_pinned(app: &AppHandle, pinned: bool) -> Result<(), String> {
@@ -368,4 +378,28 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running Codex Pulse");
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn accepts_camel_and_snake_case_completed_pending_limits() {
+        let camel_case = display_limits_from_payload(&json!({
+            "active": 2,
+            "completedPending": 1,
+            "failed": 4
+        }));
+        assert_eq!(camel_case.completed_pending, 1);
+
+        let snake_case = display_limits_from_payload(&json!({
+            "active": 2,
+            "completed_pending": 2,
+            "failed": 4
+        }));
+        assert_eq!(snake_case.completed_pending, 2);
+    }
 }
