@@ -1,6 +1,6 @@
 [package]
 name = "codex-pulse"
-version = "0.2.4"
+version = "0.2.5"
 description = "A lightweight monitor for local and remote Codex CLI sessions"
 authors = ["Codex Pulse contributors"]
 license = "MIT"

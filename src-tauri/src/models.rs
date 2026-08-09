@@ -83,6 +83,7 @@ impl DisplayLimits {
 pub struct Settings {
     pub yolo_enabled: bool,
     pub window_pinned: bool,
+    pub theme_mode: String,
     pub session_title_mode: String,
     pub display_limits: DisplayLimits,
     pub title_lines: u8,
@@ -96,6 +97,7 @@ impl Default for Settings {
         Self {
             yolo_enabled: false,
             window_pinned: false,
+            theme_mode: "system".into(),
             session_title_mode: "prompt".into(),
             display_limits: DisplayLimits::default(),
             title_lines: 1,
@@ -108,6 +110,12 @@ impl Default for Settings {
 
 impl Settings {
     pub fn normalize(mut self, now: i64) -> Self {
+        self.theme_mode = match self.theme_mode.as_str() {
+            "light" => "light",
+            "dark" => "dark",
+            _ => "system",
+        }
+        .into();
         self.session_title_mode = if self.session_title_mode == "title" {
             "title".into()
         } else {
@@ -139,6 +147,7 @@ pub struct PublishedState {
     pub remote_loading: bool,
     pub yolo_enabled: bool,
     pub window_pinned: bool,
+    pub theme_mode: String,
     pub session_title_mode: String,
     pub display_limits: DisplayLimits,
     pub title_lines: u8,
@@ -157,4 +166,26 @@ pub struct DetectedState {
 pub struct ProcessInfo {
     pub pid: u32,
     pub has_working_child: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_theme_modes() {
+        for (input, expected) in [
+            ("light", "light"),
+            ("dark", "dark"),
+            ("system", "system"),
+            ("unexpected", "system"),
+        ] {
+            let settings = Settings {
+                theme_mode: input.into(),
+                ..Settings::default()
+            }
+            .normalize(1);
+            assert_eq!(settings.theme_mode, expected);
+        }
+    }
 }

@@ -201,6 +201,7 @@ impl AppState {
             remote_loading: inner.remote_loading,
             yolo_enabled: inner.settings.yolo_enabled,
             window_pinned: inner.settings.window_pinned,
+            theme_mode: inner.settings.theme_mode.clone(),
             session_title_mode: inner.settings.session_title_mode.clone(),
             display_limits: inner.settings.display_limits.clone(),
             title_lines: inner.settings.title_lines,
@@ -231,6 +232,16 @@ impl AppState {
 
     pub fn set_window_pinned(&self, pinned: bool) -> Result<(), String> {
         self.update_settings(|settings| settings.window_pinned = pinned)
+    }
+
+    pub fn set_theme_mode(&self, mode: &str) -> Result<(), String> {
+        let mode = match mode {
+            "light" => "light",
+            "dark" => "dark",
+            _ => "system",
+        }
+        .to_string();
+        self.update_settings(|settings| settings.theme_mode = mode)
     }
 
     pub fn set_session_title_mode(&self, mode: &str) -> Result<(), String> {

@@ -64,6 +64,10 @@ async fn handle_action(
             apply_window_pinned(&app, pinned)?;
             state.publish(&app);
         }
+        "setThemeMode" => {
+            state.set_theme_mode(&required_text(&payload, "mode")?)?;
+            state.publish(&app);
+        }
         "setSessionTitleMode" => {
             state.set_session_title_mode(&required_text(&payload, "mode")?)?;
             state.publish(&app);

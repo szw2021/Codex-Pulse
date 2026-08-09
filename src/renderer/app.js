@@ -47,9 +47,11 @@
     remoteLoading: false,
     yoloEnabled: false,
     windowPinned: false,
+    themeMode: 'system',
     sessionTitleMode: 'prompt',
     displayLimits: { ...defaultDisplayLimits },
     titleLines: 1,
+    previewSessionId: null,
   };
 
   const elements = {
@@ -61,6 +63,8 @@
     refresh: document.querySelector('#refresh-button'),
     pinButton: document.querySelector('#pin-button'),
     minimizeButton: document.querySelector('#minimize-button'),
+    themeButton: document.querySelector('#theme-button'),
+    themeButtonIcon: document.querySelector('#theme-button-icon'),
     menuButton: document.querySelector('#menu-button'),
     menu: document.querySelector('#menu'),
     yoloToggle: document.querySelector('#yolo-toggle'),
@@ -88,6 +92,19 @@
     emptyAction: document.querySelector('#empty-action'),
     health: document.querySelector('#health-dot'),
     sessionContextMenu: document.querySelector('#session-context-menu'),
+    sessionPreviewModal: document.querySelector('#session-preview-modal'),
+    sessionPreviewDialog: document.querySelector('#session-preview-dialog'),
+    sessionPreviewClose: document.querySelector('#session-preview-close'),
+    sessionPreviewTitle: document.querySelector('#session-preview-title'),
+    sessionPreviewStatus: document.querySelector('#session-preview-status'),
+    sessionPreviewRelativeTime: document.querySelector('#session-preview-relative-time'),
+    sessionPreviewModel: document.querySelector('#session-preview-model'),
+    sessionPreviewId: document.querySelector('#session-preview-id'),
+    sessionPreviewProject: document.querySelector('#session-preview-project'),
+    sessionPreviewTime: document.querySelector('#session-preview-time'),
+    sessionPreviewActivity: document.querySelector('#session-preview-activity'),
+    sessionPreviewProjectAction: document.querySelector('#session-preview-project-action'),
+    sessionPreviewTerminalAction: document.querySelector('#session-preview-terminal-action'),
   };
 
   const bridge = (action, details = {}) => window.codexPulse?.send(action, details);
@@ -122,7 +139,7 @@
     0,
   );
   const focusWindowHeight = () => {
-    const rowHeight = appState.titleLines === 1 ? 43 : 58;
+    const rowHeight = appState.titleLines === 1 ? 52 : 67;
     return listChromeHeight + focusGroupChromeHeight + focusDisplayLimit() * rowHeight + 8;
   };
   let layoutFrame = null;
@@ -134,7 +151,9 @@
       layoutFrame = null;
       const listHeight = focusWindowHeight();
       let height = listHeight;
-      if (!elements.remoteModal.hidden) {
+      if (!elements.sessionPreviewModal.hidden) {
+        height = Math.max(listHeight, 420);
+      } else if (!elements.remoteModal.hidden) {
         height = Math.max(listHeight, 440);
       } else if (!elements.displaySettingsModal.hidden) {
         height = Math.max(listHeight, 430);
@@ -168,6 +187,9 @@
     appState.remoteLoading = Boolean(payload.remoteLoading);
     if (typeof payload.yoloEnabled === 'boolean') appState.yoloEnabled = payload.yoloEnabled;
     if (typeof payload.windowPinned === 'boolean') appState.windowPinned = payload.windowPinned;
+    if (['light', 'dark', 'system'].includes(payload.themeMode)) {
+      appState.themeMode = payload.themeMode;
+    }
     if (payload.sessionTitleMode === 'prompt' || payload.sessionTitleMode === 'title') {
       appState.sessionTitleMode = payload.sessionTitleMode;
     }
@@ -184,9 +206,11 @@
     appState.titleLines = payload.titleLines === 2 ? 2 : 1;
     elements.reloadSSHHosts.textContent = '重新读取';
     render();
+    refreshSessionPreview();
   }
 
   function render() {
+    window.codexPulseTheme?.apply(appState.themeMode);
     document.body.classList.toggle('yolo-enabled', appState.yoloEnabled);
     document.body.classList.toggle('title-lines-1', appState.titleLines === 1);
     elements.yoloToggle.classList.toggle('enabled', appState.yoloEnabled);
@@ -201,6 +225,16 @@
       button.classList.toggle('selected', selected);
       button.setAttribute('aria-pressed', String(selected));
     });
+    const themeLabels = { light: '浅色', dark: '深色', system: '跟随系统' };
+    const themeIcons = {
+      light: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/>',
+      dark: '<path d="M20 15.1A8 8 0 0 1 8.9 4 8 8 0 1 0 20 15.1Z"/>',
+      system: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>',
+    };
+    const themeLabel = themeLabels[appState.themeMode] || themeLabels.system;
+    elements.themeButton.title = `外观：${themeLabel}；点击切换`;
+    elements.themeButton.setAttribute('aria-label', elements.themeButton.title);
+    elements.themeButtonIcon.innerHTML = themeIcons[appState.themeMode] || themeIcons.system;
     elements.refresh.classList.toggle('spinning', appState.remoteLoading);
     renderRemoteManagement();
 
@@ -475,6 +509,19 @@
     const row = document.createElement('article');
     row.className = 'session-row';
     row.dataset.state = session.state;
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    row.setAttribute('aria-label', `预览会话：${session.lastPrompt || session.title || '无标题会话'}`);
+    row.addEventListener('click', event => {
+      if (event.target.closest('button')) return;
+      openSessionPreview(session);
+    });
+    row.addEventListener('keydown', event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      if (event.target.closest('button')) return;
+      event.preventDefault();
+      openSessionPreview(session);
+    });
     row.addEventListener('contextmenu', event => {
       event.preventDefault();
       openSessionContextMenu(session, event.clientX, event.clientY);
@@ -606,6 +653,123 @@
     }
     row.append(top, actions);
     return row;
+  }
+
+  function sessionPreviewActivities(session) {
+    const meta = stateMeta[session.state] || stateMeta.completed;
+    const activities = [{
+      label: relativeTime(session.updatedAt),
+      text: session.detail || `当前状态：${meta.label}`,
+    }];
+    if (session.lastPrompt) {
+      activities.push({ label: '最近提问', text: session.lastPrompt });
+    }
+    if (session.writerOwner || session.pid) {
+      const owner = session.writerOwner || (session.source === 'remote' ? '远程终端' : '本地终端');
+      const tty = session.writerTty ? ` · ${session.writerTty}` : '';
+      const pid = session.pid ? ` · PID ${session.pid}` : '';
+      activities.push({ label: '终端', text: `${owner}正在持有会话${tty}${pid}` });
+    } else if (session.state === 'active' || session.state === 'attention') {
+      activities.push({ label: '终端', text: '扫描到会话仍在运行，继续操作已暂时锁定' });
+    }
+    if (session.cwd) {
+      activities.push({
+        label: session.source === 'remote' ? '远程目录' : '工作目录',
+        text: session.cwd,
+      });
+    }
+    return activities.slice(0, 5);
+  }
+
+  function createPreviewActivity(activity) {
+    const item = document.createElement('li');
+    const dot = document.createElement('span');
+    dot.className = 'activity-dot';
+    const label = document.createElement('span');
+    label.className = 'activity-time';
+    label.textContent = activity.label;
+    const text = document.createElement('span');
+    text.textContent = activity.text;
+    text.title = activity.text;
+    item.append(dot, label, text);
+    return item;
+  }
+
+  function formatDateTime(timestamp) {
+    const value = Number(timestamp);
+    if (!Number.isFinite(value) || value <= 0) return '—';
+    return new Intl.DateTimeFormat('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(new Date(value));
+  }
+
+  function renderSessionPreview(session) {
+    const meta = stateMeta[session.state] || stateMeta.completed;
+    const remote = session.source === 'remote';
+    const writerActive = Number.isInteger(session.pid) && session.pid > 0;
+    const resumeBlocked = writerActive || session.state === 'active' || session.state === 'attention';
+    const projectLabel = remote
+      ? `${session.remoteHost || '远程'} · ${session.projectName || '远程目录'}`
+      : (session.projectName || session.cwd || '—');
+
+    elements.sessionPreviewDialog.dataset.state = session.state;
+    elements.sessionPreviewTitle.textContent = session.lastPrompt || session.title || '无标题会话';
+    elements.sessionPreviewTitle.title = elements.sessionPreviewTitle.textContent;
+    elements.sessionPreviewStatus.textContent = meta.label;
+    elements.sessionPreviewRelativeTime.textContent = `${relativeTime(session.updatedAt)}更新`;
+    elements.sessionPreviewModel.textContent = session.model || '—';
+    elements.sessionPreviewId.textContent = session.shortId || session.remoteSessionId || session.id;
+    elements.sessionPreviewId.title = session.remoteSessionId || session.id;
+    elements.sessionPreviewProject.textContent = projectLabel;
+    elements.sessionPreviewProject.title = remote ? `${session.remoteHost || ''} · ${session.cwd || ''}` : (session.cwd || projectLabel);
+    elements.sessionPreviewTime.textContent = formatDateTime(session.updatedAt);
+    elements.sessionPreviewActivity.replaceChildren(
+      ...sessionPreviewActivities(session).map(createPreviewActivity),
+    );
+
+    elements.sessionPreviewProjectAction.dataset.sessionId = session.id;
+    elements.sessionPreviewProjectAction.dataset.action = remote ? 'remoteConnect' : 'reveal';
+    elements.sessionPreviewProjectAction.dataset.host = session.remoteHost || '';
+    elements.sessionPreviewProjectAction.textContent = remote ? '连接服务器' : '打开项目';
+    elements.sessionPreviewProjectAction.disabled = remote && !session.remoteHost;
+
+    elements.sessionPreviewTerminalAction.dataset.sessionId = session.id;
+    elements.sessionPreviewTerminalAction.dataset.action = remote ? 'remoteResume' : 'resume';
+    elements.sessionPreviewTerminalAction.textContent = resumeBlocked
+      ? '正在原终端运行'
+      : (remote ? '通过 SSH 继续' : '在终端中继续');
+    elements.sessionPreviewTerminalAction.disabled = resumeBlocked;
+  }
+
+  function refreshSessionPreview() {
+    if (!appState.previewSessionId || elements.sessionPreviewModal.hidden) return;
+    const session = currentSessions().find(item => item.id === appState.previewSessionId);
+    if (session) renderSessionPreview(session);
+    else closeSessionPreview();
+  }
+
+  function openSessionPreview(session) {
+    closeSessionContextMenu();
+    elements.menu.hidden = true;
+    elements.remoteModal.hidden = true;
+    elements.renameModal.hidden = true;
+    elements.displaySettingsModal.hidden = true;
+    appState.previewSessionId = session.id;
+    renderSessionPreview(session);
+    elements.sessionPreviewModal.hidden = false;
+    scheduleWindowHeight();
+    setTimeout(() => elements.sessionPreviewClose.focus(), 0);
+  }
+
+  function closeSessionPreview() {
+    elements.sessionPreviewModal.hidden = true;
+    appState.previewSessionId = null;
+    scheduleWindowHeight();
   }
 
   function closeSessionContextMenu() {
@@ -745,6 +909,7 @@
     else if (action) bridge(action, { host: elements.emptyAction.dataset.host || '' });
   });
   const openRemoteModal = () => {
+    closeSessionPreview();
     elements.remoteModal.hidden = false;
     elements.displaySettingsModal.hidden = true;
     elements.menu.hidden = true;
@@ -762,6 +927,7 @@
   };
   const openRenameModal = payload => {
     if (!payload || typeof payload.id !== 'string') return;
+    closeSessionPreview();
     elements.remoteModal.hidden = true;
     elements.menu.hidden = true;
     elements.renameForm.dataset.sessionId = payload.id;
@@ -782,6 +948,7 @@
     elements.focusLimitTotal.textContent = `${total} 条`;
   };
   const openDisplaySettings = () => {
+    closeSessionPreview();
     elements.remoteModal.hidden = true;
     elements.menu.hidden = true;
     for (const input of elements.displaySettingsForm.querySelectorAll('[data-display-limit]')) {
@@ -803,6 +970,24 @@
     window.codexPulse?.startDragging();
   });
   elements.displaySettingsMenu.addEventListener('click', openDisplaySettings);
+  elements.sessionPreviewClose.addEventListener('click', closeSessionPreview);
+  elements.sessionPreviewModal.addEventListener('click', event => {
+    if (event.target === elements.sessionPreviewModal) closeSessionPreview();
+  });
+  elements.sessionPreviewProjectAction.addEventListener('click', () => {
+    const action = elements.sessionPreviewProjectAction.dataset.action;
+    const id = elements.sessionPreviewProjectAction.dataset.sessionId;
+    if (action === 'remoteConnect') {
+      bridge(action, { host: elements.sessionPreviewProjectAction.dataset.host || '' });
+    } else if (action && id) {
+      bridge(action, { id });
+    }
+  });
+  elements.sessionPreviewTerminalAction.addEventListener('click', () => {
+    const action = elements.sessionPreviewTerminalAction.dataset.action;
+    const id = elements.sessionPreviewTerminalAction.dataset.sessionId;
+    if (action && id) bridge(action, { id });
+  });
   elements.remoteModalClose.addEventListener('click', closeRemoteModal);
   elements.reloadSSHHosts.addEventListener('click', () => {
     elements.reloadSSHHosts.textContent = '读取中…';
@@ -895,6 +1080,17 @@
       bridge('setSessionTitleMode', { mode });
     });
   });
+  elements.themeButton.addEventListener('click', event => {
+    event.stopPropagation();
+    elements.menu.hidden = true;
+    closeSessionContextMenu();
+    const modes = ['system', 'light', 'dark'];
+    const currentIndex = modes.indexOf(appState.themeMode);
+    const mode = modes[(currentIndex + 1) % modes.length];
+    appState.themeMode = window.codexPulseTheme?.apply(mode) || mode;
+    render();
+    bridge('setThemeMode', { mode: appState.themeMode });
+  });
   elements.menuButton.addEventListener('click', event => {
     event.stopPropagation();
     closeSessionContextMenu();
@@ -909,6 +1105,7 @@
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
     if (!elements.sessionContextMenu.hidden) closeSessionContextMenu();
+    else if (!elements.sessionPreviewModal.hidden) closeSessionPreview();
     else if (!elements.displaySettingsModal.hidden) closeDisplaySettings();
     else if (!elements.renameModal.hidden) closeRenameModal();
     else if (!elements.remoteModal.hidden) closeRemoteModal();
