@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Codex Pulse",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "identifier": "dev.local.codex-pulse",
   "build": {
     "frontendDist": "../src/renderer"
@@ -50,8 +50,9 @@
       "signingIdentity": "-",
       "hardenedRuntime": false,
       "dmg": {
-        "appPosition": { "x": 180, "y": 170 },
-        "applicationFolderPosition": { "x": 480, "y": 170 },
+        "background": "./dmg/background.png",
+        "appPosition": { "x": 170, "y": 220 },
+        "applicationFolderPosition": { "x": 490, "y": 220 },
         "windowSize": { "width": 660, "height": 400 }
       }
     }

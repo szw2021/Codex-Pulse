@@ -58,7 +58,6 @@ input, textarea, [contenteditable="true"] {
   gap: 8px;
   padding: 10px 11px 8px;
   cursor: default;
-  -webkit-app-region: drag;
 }
 
 .health-dot {

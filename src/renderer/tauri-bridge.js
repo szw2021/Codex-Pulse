@@ -1,5 +1,6 @@
 (() => {
   const tauri = window.__TAURI__;
+  const currentWindow = tauri?.window?.getCurrentWindow?.();
   const stateListeners = new Set();
   const commandListeners = new Set();
 
@@ -21,6 +22,13 @@
   };
 
   window.codexPulse = Object.freeze({
+    startDragging() {
+      if (!currentWindow?.startDragging) {
+        reportError('窗口拖动 API 不可用');
+        return;
+      }
+      void currentWindow.startDragging().catch(reportError);
+    },
     send(action, details = {}) {
       const safeDetails = details && typeof details === 'object' && !Array.isArray(details)
         ? details

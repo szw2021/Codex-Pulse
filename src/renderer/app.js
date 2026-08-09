@@ -53,6 +53,7 @@
   };
 
   const elements = {
+    dragRegion: document.querySelector('#drag-region'),
     subtitle: document.querySelector('#subtitle'),
     list: document.querySelector('#session-list'),
     empty: document.querySelector('#empty-state'),
@@ -795,6 +796,12 @@
     scheduleWindowHeight();
   };
   elements.manageRemoteMenu.addEventListener('click', openRemoteModal);
+  elements.dragRegion.addEventListener('mousedown', event => {
+    if (event.button !== 0) return;
+    if (event.target.closest?.('button, input, select, textarea, a, [contenteditable="true"], .menu')) return;
+    event.preventDefault();
+    window.codexPulse?.startDragging();
+  });
   elements.displaySettingsMenu.addEventListener('click', openDisplaySettings);
   elements.remoteModalClose.addEventListener('click', closeRemoteModal);
   elements.reloadSSHHosts.addEventListener('click', () => {
