@@ -75,6 +75,6 @@ npm run check
 
 独立运行的 Codex CLI 不会把实时 app-server 事件转发给监控进程，因此 Codex Pulse 采用只读检测：结合 JSONL 事件、审批策略、会话文件占用和子进程状态判断任务状态。
 
-Claude Code 的检测方式不同：它写会话文件是“打开-写入-关闭”，lsof 看不到文件占用，因此改为解析 `~/.claude/projects` 下转录尾部的回合边界记录（每回合结束时追加的 `last-prompt`），并按进程工作目录匹配正在运行的 `claude` 进程，以此区分进行中、等待确认、已完成与意外停止。Claude 会话暂不支持重命名与删除。
+Claude Code 2.1.139+ 优先通过 `claude agents --json` 按会话 ID 读取运行、等待和空闲状态；旧版本或命令不可用时，再解析 `~/.claude/projects` 下的 `last-prompt`、`turn_duration` 等回合边界记录，并以进程工作目录作为兼容回退。Claude 会话暂不支持重命名与删除。
 
 本地扫描与状态管理位于 `src-tauri/src/`，远程适配会把 `src/remote/remote_scanner.py` 编译进 Rust 二进制，并通过 SSH 标准输入发送到服务器执行，不在远程服务器写入脚本文件。远程机器上只装 Codex 或只装 Claude 都可以正常扫描。

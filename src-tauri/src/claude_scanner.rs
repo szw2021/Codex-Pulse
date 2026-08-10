@@ -9,13 +9,16 @@ use std::{
 use serde_json::Value;
 
 use crate::{
-    models::{ProcessInfo, Session},
+    models::Session,
     scanner::{clean_optional, parse_json_timestamp, system_time_millis, tail_data},
-    session_process::claude_processes_by_cwd,
+    session_process::{
+        ClaudeAgentStatus, ClaudeProcessInfo, ClaudeProcessSnapshot, claude_processes,
+    },
 };
 
 const MAX_TAIL_BYTES: u64 = 512 * 1024;
 const RECENT_ACTIVE_MILLIS: i64 = 60_000;
+const PROCESS_CACHE_MILLIS: i64 = 4_000;
 
 #[derive(Clone)]
 struct ParseCache {
@@ -27,6 +30,7 @@ struct ParseCache {
 pub struct ClaudeScanner {
     claude_home: PathBuf,
     parse_cache: HashMap<PathBuf, ParseCache>,
+    process_cache: Option<(i64, ClaudeProcessSnapshot)>,
 }
 
 impl ClaudeScanner {
@@ -34,6 +38,7 @@ impl ClaudeScanner {
         Self {
             claude_home,
             parse_cache: HashMap::new(),
+            process_cache: None,
         }
     }
 
@@ -46,8 +51,17 @@ impl ClaudeScanner {
         entries.sort_by_key(|entry| Reverse(entry.1));
         entries.truncate(100);
 
-        let processes = claude_processes_by_cwd();
         let now = system_time_millis_now();
+        let (process_snapshot_at, processes) = match &self.process_cache {
+            Some((captured_at, snapshot)) if now - captured_at < PROCESS_CACHE_MILLIS => {
+                (*captured_at, snapshot.clone())
+            }
+            _ => {
+                let snapshot = claude_processes();
+                self.process_cache = Some((now, snapshot.clone()));
+                (now, snapshot)
+            }
+        };
         let mut sessions = Vec::new();
         let mut scanned_paths = HashSet::new();
 
@@ -83,17 +97,28 @@ impl ClaudeScanner {
                 continue;
             }
 
-            let process_info = Path::new(&info.cwd)
-                .canonicalize()
-                .ok()
-                .and_then(|cwd| processes.get(&cwd).copied());
-            let resolved = resolve_state(&info, process_info, modified_at, now);
-
             let session_id = info
                 .session_id
                 .clone()
-                .or_else(|| canonical.file_stem().and_then(|s| s.to_str()).map(String::from))
+                .or_else(|| {
+                    canonical
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(String::from)
+                })
                 .unwrap_or_else(|| "unknown".into());
+            let mut process_info = Path::new(&info.cwd)
+                .canonicalize()
+                .ok()
+                .and_then(|cwd| processes.for_session(&session_id, &cwd));
+            // 缓存期间若转录有新写入，不采用更早的精确状态，避免 idle 覆盖新回合。
+            if modified_at > process_snapshot_at
+                && let Some(process) = &mut process_info
+            {
+                process.status = None;
+            }
+            let resolved = resolve_state(&info, process_info, modified_at, now);
+
             let short_id: String = session_id.chars().take(8).collect();
             let project_name = Path::new(&info.cwd)
                 .file_name()
@@ -109,8 +134,8 @@ impl ClaudeScanner {
                 .completion_token
                 .as_ref()
                 .map(|token| format!("{session_id}:{token}"));
-            // 进程按目录匹配，只在回合未结束时视为"占用"，
-            // 避免同目录里已完成的会话被误判为不可恢复。
+            // 精确 API 返回的 idle 进程仍持有会话，因此保留 PID 阻止并发恢复；
+            // 旧版 cwd 回退只在回合未结束时视为占用。
             let pid = resolved
                 .occupied
                 .then(|| process_info.map(|value| value.pid))
@@ -261,7 +286,11 @@ pub(crate) fn analyze_transcript(data: &[u8]) -> TranscriptInfo {
                 info.dangling_tool = None;
             }
             "user" => {
-                if record.get("isMeta").and_then(Value::as_bool).unwrap_or(false) {
+                if record
+                    .get("isMeta")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
                     continue;
                 }
                 let Some(event) = classify_user_message(&record) else {
@@ -290,13 +319,19 @@ pub(crate) fn analyze_transcript(data: &[u8]) -> TranscriptInfo {
                 match trailing_content(content) {
                     Some(("tool_use", name)) => info.dangling_tool = Some(name),
                     Some(("text", _)) => {
-                        info.trailing_assistant_text_uuid = record
-                            .get("uuid")
-                            .and_then(Value::as_str)
-                            .map(String::from);
+                        info.trailing_assistant_text_uuid =
+                            record.get("uuid").and_then(Value::as_str).map(String::from);
                     }
                     _ => {}
                 }
+            }
+            "system" if record.get("subtype").and_then(Value::as_str) == Some("turn_duration") => {
+                // Claude 2.1.226 等版本以 turn_duration 标记回合结束，
+                // 后面可能继续追加 away_summary 等非对话元数据。
+                info.saw_turn_marker = true;
+                info.turn_open = false;
+                info.ends_with_interrupt = false;
+                info.dangling_tool = None;
             }
             _ => {}
         }
@@ -395,7 +430,7 @@ pub(crate) struct ResolvedState {
 
 pub(crate) fn resolve_state(
     info: &TranscriptInfo,
-    process_info: Option<ProcessInfo>,
+    process_info: Option<ClaudeProcessInfo>,
     file_modified_at: i64,
     now: i64,
 ) -> ResolvedState {
@@ -411,21 +446,54 @@ pub(crate) fn resolve_state(
         completion_token: token,
         occupied,
     };
-    let completed = |detail_done: bool| {
+    let completed = |detail_done: bool, occupied: bool| {
         let token = info.trailing_assistant_text_uuid.clone();
         if detail_done && token.is_some() {
-            make("completed", "本轮任务已完成", token, false)
+            make("completed", "本轮任务已完成", token, occupied)
         } else {
-            make("completed", "会话当前空闲", None, false)
+            make("completed", "会话当前空闲", None, occupied)
         }
     };
 
+    if info.ends_with_interrupt {
+        return make(
+            "failed",
+            "任务已中止",
+            None,
+            process_info.is_some_and(|process| process.exact),
+        );
+    }
+    if let Some(process) = process_info {
+        match process.status {
+            Some(ClaudeAgentStatus::Active) => {
+                let detail = if process.has_working_child {
+                    "正在执行命令"
+                } else {
+                    "Claude 正在思考与执行"
+                };
+                return make("active", detail, None, true);
+            }
+            Some(ClaudeAgentStatus::Attention) => {
+                let detail = info
+                    .dangling_tool
+                    .as_deref()
+                    .and_then(|tool| attention_detail(tool, &info.permission_mode))
+                    .unwrap_or("Claude 正在等待你的操作");
+                return make("attention", detail, None, true);
+            }
+            Some(ClaudeAgentStatus::Idle) => return completed(true, true),
+            Some(ClaudeAgentStatus::Failed) => {
+                return make("failed", "Claude 会话执行失败", None, true);
+            }
+            Some(ClaudeAgentStatus::Stopped) => {
+                return make("failed", "Claude 会话已停止", None, true);
+            }
+            Some(ClaudeAgentStatus::Unknown) | None => {}
+        }
+    }
     if !info.turn_open {
         // 回合已结束：即使文件刚写入也立即算完成，不再等待 60 秒冷却
-        return completed(true);
-    }
-    if info.ends_with_interrupt {
-        return make("failed", "任务已中止", None, false);
+        return completed(true, process_info.is_some_and(|process| process.exact));
     }
     let recent = file_modified_at > 0 && now - file_modified_at < RECENT_ACTIVE_MILLIS;
     if let Some(process) = process_info {
@@ -451,7 +519,10 @@ pub(crate) fn resolve_state(
         return make("failed", "会话意外停止，没有完成事件", None, false);
     }
     // 旧格式（尾部窗口内没有 last-prompt 记录）：按尾部形状退化判断
-    completed(info.dangling_tool.is_none() && info.trailing_assistant_text_uuid.is_some())
+    completed(
+        info.dangling_tool.is_none() && info.trailing_assistant_text_uuid.is_some(),
+        false,
+    )
 }
 
 /// 悬挂的 tool_use 是否可能在等待用户确认。
@@ -553,15 +624,39 @@ mod tests {
         .to_string()
     }
 
-    fn resolve(lines: &[String], process: Option<ProcessInfo>, modified_ago_secs: i64) -> ResolvedState {
+    fn resolve(
+        lines: &[String],
+        process: Option<ClaudeProcessInfo>,
+        modified_ago_secs: i64,
+    ) -> ResolvedState {
         let info = analyze_transcript(lines.join("\n").as_bytes());
         resolve_state(&info, process, NOW - modified_ago_secs * 1000, NOW)
     }
 
-    fn idle_process() -> Option<ProcessInfo> {
-        Some(ProcessInfo {
+    fn fallback_process() -> Option<ClaudeProcessInfo> {
+        Some(ClaudeProcessInfo {
             pid: 9,
             has_working_child: false,
+            status: None,
+            exact: false,
+        })
+    }
+
+    fn exact_process(status: ClaudeAgentStatus) -> Option<ClaudeProcessInfo> {
+        Some(ClaudeProcessInfo {
+            pid: 9,
+            has_working_child: false,
+            status: Some(status),
+            exact: true,
+        })
+    }
+
+    fn stale_exact_process() -> Option<ClaudeProcessInfo> {
+        Some(ClaudeProcessInfo {
+            pid: 9,
+            has_working_child: false,
+            status: None,
+            exact: true,
         })
     }
 
@@ -573,7 +668,7 @@ mod tests {
             assistant_text("a1", 5000),
             turn_marker("帮我修 bug"),
         ];
-        let result = resolve(&lines, idle_process(), 2);
+        let result = resolve(&lines, fallback_process(), 2);
         assert_eq!(result.state, "completed");
         assert_eq!(result.detail, "本轮任务已完成");
         assert_eq!(result.completion_token.as_deref(), Some("a1"));
@@ -588,7 +683,7 @@ mod tests {
             assistant_tool_use("Read", 3000),
             user_message("", 2000), // tool_result 占位由下方数组形式覆盖
         ];
-        let result = resolve(&lines[..3], idle_process(), 120);
+        let result = resolve(&lines[..3], fallback_process(), 120);
         // 悬挂 Read 不触发确认提醒（不属于需审批工具）→ active
         assert_eq!(result.state, "active");
         assert!(result.occupied);
@@ -601,13 +696,15 @@ mod tests {
             user_message("跑测试", 65_000),
             assistant_tool_use("Bash", 62_000),
         ];
-        let result = resolve(&lines, idle_process(), 62);
+        let result = resolve(&lines, fallback_process(), 62);
         assert_eq!(result.state, "attention");
         assert_eq!(result.detail, "命令执行等待确认");
         // 工作子进程存在时说明命令在跑，不是等待确认
-        let working = Some(ProcessInfo {
+        let working = Some(ClaudeProcessInfo {
             pid: 9,
             has_working_child: true,
+            status: None,
+            exact: false,
         });
         assert_eq!(resolve(&lines, working, 62).state, "active");
     }
@@ -626,10 +723,7 @@ mod tests {
 
     #[test]
     fn active_when_recently_written_without_process() {
-        let lines = [
-            turn_marker("旧提示"),
-            user_message("帮我修 bug", 10_000),
-        ];
+        let lines = [turn_marker("旧提示"), user_message("帮我修 bug", 10_000)];
         assert_eq!(resolve(&lines, None, 10).state, "active");
     }
 
@@ -651,6 +745,9 @@ mod tests {
         let result = resolve(&lines, None, 120);
         assert_eq!(result.state, "failed");
         assert_eq!(result.detail, "任务已中止");
+        let exact_idle = resolve(&lines, exact_process(ClaudeAgentStatus::Idle), 120);
+        assert_eq!(exact_idle.state, "failed");
+        assert!(exact_idle.occupied);
     }
 
     #[test]
@@ -660,6 +757,60 @@ mod tests {
         let result = resolve(&lines, None, 120);
         assert_eq!(result.state, "completed");
         assert_eq!(result.completion_token.as_deref(), Some("a1"));
+    }
+
+    #[test]
+    fn turn_duration_marks_current_turn_completed() {
+        let turn_duration = serde_json::json!({
+            "type": "system",
+            "subtype": "turn_duration",
+            "sessionId": "abc-123",
+            "cwd": "/tmp/project",
+            "timestamp": ts(1000),
+            "durationMs": 4000
+        })
+        .to_string();
+        let lines = [
+            user_message("帮我修 bug", 9000),
+            assistant_text("a1", 5000),
+            turn_duration,
+        ];
+        let result = resolve(&lines, fallback_process(), 1);
+        assert_eq!(result.state, "completed");
+        assert_eq!(result.completion_token.as_deref(), Some("a1"));
+        assert!(!result.occupied);
+    }
+
+    #[test]
+    fn exact_idle_status_is_completed_but_keeps_writer_pid() {
+        let lines = [user_message("帮我修 bug", 9000), assistant_text("a1", 5000)];
+        let result = resolve(&lines, exact_process(ClaudeAgentStatus::Idle), 5);
+        assert_eq!(result.state, "completed");
+        assert!(result.occupied);
+    }
+
+    #[test]
+    fn exact_active_status_overrides_stale_turn_marker() {
+        let lines = [
+            user_message("旧任务", 9000),
+            assistant_text("a1", 5000),
+            turn_marker("旧任务"),
+        ];
+        let result = resolve(&lines, exact_process(ClaudeAgentStatus::Active), 2);
+        assert_eq!(result.state, "active");
+        assert!(result.occupied);
+    }
+
+    #[test]
+    fn completed_turn_keeps_exact_writer_during_status_cache_refresh() {
+        let lines = [
+            user_message("旧任务", 9000),
+            assistant_text("a1", 5000),
+            turn_marker("旧任务"),
+        ];
+        let result = resolve(&lines, stale_exact_process(), 2);
+        assert_eq!(result.state, "completed");
+        assert!(result.occupied);
     }
 
     #[test]
