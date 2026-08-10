@@ -403,6 +403,7 @@ def detect_state(path, approval_mode, active_pid, working_child, modified_at, no
     last_prompt_value = None
     resolved_calls = set()
     latest_call = None
+    turn_approval_mode = None
 
     for raw in reversed(lines):
         root = json_line(raw)
@@ -416,6 +417,8 @@ def detect_state(path, approval_mode, active_pid, working_child, modified_at, no
             last_event_at = timestamp
         outer_type = root.get("type")
         payload_type = payload.get("type")
+        if turn_approval_mode is None and outer_type == "turn_context":
+            turn_approval_mode = payload.get("approval_policy")
         if last_prompt_value is None:
             last_prompt_value = prompt_from_record(root)
         if outer_type == "event_msg":
@@ -457,7 +460,7 @@ def detect_state(path, approval_mode, active_pid, working_child, modified_at, no
     if not found_boundary and active_pid and latest_call:
         unfinished = True
     if unfinished:
-        if latest_call and needs_attention(latest_call, approval_mode, working_child, now):
+        if latest_call and needs_attention(latest_call, turn_approval_mode or approval_mode, working_child, now):
             return "attention", attention_detail(latest_call["name"]), latest_call.get("started_at") or updated_at, last_prompt_value, None, activities
         if active_pid or now - modified_at < 12:
             detail = "正在执行命令" if working_child else "Codex 正在思考与执行"

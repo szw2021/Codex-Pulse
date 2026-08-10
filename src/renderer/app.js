@@ -3,7 +3,7 @@
     active: { label: '进行中', mark: '∿' },
     completed_pending: { label: '刚完成', mark: '✓' },
     completed: { label: '已完成', mark: '·' },
-    attention: { label: '等待处理', mark: '!' },
+    attention: { label: '待确认', mark: '!' },
     failed: { label: '执行失败', mark: '×' },
   };
 
