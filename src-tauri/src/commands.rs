@@ -86,6 +86,7 @@ mod tests {
             state: "completed".into(),
             detail: String::new(),
             updated_at: 0,
+            activities: Vec::new(),
             model: None,
             pid: None,
             writer_owner: None,

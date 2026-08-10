@@ -13,7 +13,11 @@ use glob::glob;
 use serde_json::Value;
 use wait_timeout::ChildExt;
 
-use crate::{models::Session, scanner::clean_string, settings::now_millis};
+use crate::{
+    models::{Session, SessionActivity},
+    scanner::clean_string,
+    settings::now_millis,
+};
 
 const REMOTE_SCRIPT: &str = include_str!("../../src/remote/remote_scanner.py");
 const MAX_REMOTE_OUTPUT: usize = 16 * 1024 * 1024;
@@ -201,6 +205,7 @@ fn sessions_from_json(data: &[u8], host: &str) -> Result<Vec<Session>, String> {
                 .and_then(Value::as_f64)
                 .map(|value| value as i64)
                 .unwrap_or_else(now_millis),
+            activities: activities_from_json(item),
             model: json_text(item, "model", 100),
             pid: item
                 .get("pid")
@@ -218,6 +223,29 @@ fn sessions_from_json(data: &[u8], host: &str) -> Result<Vec<Session>, String> {
         });
     }
     Ok(sessions)
+}
+
+fn activities_from_json(session: &Value) -> Vec<SessionActivity> {
+    session
+        .get("activities")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            let text = json_text(item, "text", 240)?;
+            Some(SessionActivity {
+                kind: json_text(item, "kind", 30).unwrap_or_else(|| "activity".into()),
+                label: json_text(item, "label", 30).unwrap_or_else(|| "动态".into()),
+                text,
+                timestamp: item
+                    .get("timestamp")
+                    .and_then(Value::as_f64)
+                    .map(|value| value as i64)
+                    .unwrap_or_default(),
+            })
+        })
+        .take(24)
+        .collect()
 }
 
 fn json_text(value: &Value, key: &str, limit: usize) -> Option<String> {
@@ -391,7 +419,7 @@ mod tests {
 
     #[test]
     fn normalizes_remote_sessions() {
-        let data = r#"{"sessions":[{"id":"remote-id","title":"标题","lastPrompt":"最后提问","cwd":"/srv/demo","state":"completed","updatedAt":42,"completionToken":"turn-1"}]}"#;
+        let data = r#"{"sessions":[{"id":"remote-id","title":"标题","lastPrompt":"最后提问","cwd":"/srv/demo","state":"completed","updatedAt":42,"completionToken":"turn-1","activities":[{"kind":"command","label":"执行命令","text":"cargo test","timestamp":40}]}]}"#;
         let sessions = sessions_from_json(data.as_bytes(), "dev-box").unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].id, "remote:dev-box:remote-id");
@@ -400,5 +428,7 @@ mod tests {
             sessions[0].completion_key.as_deref(),
             Some("remote:dev-box:remote-id:turn-1")
         );
+        assert_eq!(sessions[0].activities.len(), 1);
+        assert_eq!(sessions[0].activities[0].text, "cargo test");
     }
 }

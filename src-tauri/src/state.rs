@@ -517,6 +517,7 @@ mod tests {
             state: state.into(),
             detail: String::new(),
             updated_at: 20,
+            activities: Vec::new(),
             model: None,
             pid: None,
             writer_owner: None,

@@ -4,6 +4,15 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionActivity {
+    pub kind: String,
+    pub label: String,
+    pub text: String,
+    pub timestamp: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Session {
     pub id: String,
     pub short_id: String,
@@ -16,6 +25,8 @@ pub struct Session {
     pub state: String,
     pub detail: String,
     pub updated_at: i64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub activities: Vec<SessionActivity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -158,6 +169,7 @@ pub struct DetectedState {
     pub state: String,
     pub detail: String,
     pub updated_at: i64,
+    pub activities: Vec<SessionActivity>,
     pub last_prompt: Option<String>,
     pub completion_token: Option<String>,
 }

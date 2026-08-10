@@ -102,6 +102,7 @@
     sessionPreviewId: document.querySelector('#session-preview-id'),
     sessionPreviewProject: document.querySelector('#session-preview-project'),
     sessionPreviewTime: document.querySelector('#session-preview-time'),
+    sessionPreviewActivityTitle: document.querySelector('#session-preview-activity-title'),
     sessionPreviewActivity: document.querySelector('#session-preview-activity'),
     sessionPreviewProjectAction: document.querySelector('#session-preview-project-action'),
     sessionPreviewTerminalAction: document.querySelector('#session-preview-terminal-action'),
@@ -656,38 +657,54 @@
   }
 
   function sessionPreviewActivities(session) {
+    const recorded = Array.isArray(session.activities)
+      ? session.activities
+        .filter(activity => activity && typeof activity.text === 'string' && activity.text.trim())
+        .map(activity => ({
+          kind: typeof activity.kind === 'string' ? activity.kind : 'activity',
+          label: typeof activity.label === 'string' ? activity.label : '动态',
+          text: activity.text,
+          timestamp: Number(activity.timestamp) || 0,
+        }))
+      : [];
+    if (recorded.length) return recorded;
+
     const meta = stateMeta[session.state] || stateMeta.completed;
     const activities = [{
+      kind: session.state === 'failed' ? 'failed' : 'status',
       label: relativeTime(session.updatedAt),
       text: session.detail || `当前状态：${meta.label}`,
     }];
     if (session.lastPrompt) {
-      activities.push({ label: '最近提问', text: session.lastPrompt });
+      activities.push({ kind: 'prompt', label: '最近提问', text: session.lastPrompt });
     }
     if (session.writerOwner || session.pid) {
       const owner = session.writerOwner || (session.source === 'remote' ? '远程终端' : '本地终端');
       const tty = session.writerTty ? ` · ${session.writerTty}` : '';
       const pid = session.pid ? ` · PID ${session.pid}` : '';
-      activities.push({ label: '终端', text: `${owner}正在持有会话${tty}${pid}` });
+      activities.push({ kind: 'terminal', label: '终端', text: `${owner}正在持有会话${tty}${pid}` });
     } else if (session.state === 'active' || session.state === 'attention') {
-      activities.push({ label: '终端', text: '扫描到会话仍在运行，继续操作已暂时锁定' });
+      activities.push({ kind: 'terminal', label: '终端', text: '扫描到会话仍在运行，继续操作已暂时锁定' });
     }
     if (session.cwd) {
       activities.push({
+        kind: 'directory',
         label: session.source === 'remote' ? '远程目录' : '工作目录',
         text: session.cwd,
       });
     }
-    return activities.slice(0, 5);
+    return activities;
   }
 
   function createPreviewActivity(activity) {
     const item = document.createElement('li');
+    item.dataset.kind = activity.kind || 'activity';
     const dot = document.createElement('span');
     dot.className = 'activity-dot';
     const label = document.createElement('span');
     label.className = 'activity-time';
     label.textContent = activity.label;
+    if (activity.timestamp) label.title = formatDateTime(activity.timestamp);
     const text = document.createElement('span');
     text.textContent = activity.text;
     text.title = activity.text;
@@ -728,8 +745,12 @@
     elements.sessionPreviewProject.textContent = projectLabel;
     elements.sessionPreviewProject.title = remote ? `${session.remoteHost || ''} · ${session.cwd || ''}` : (session.cwd || projectLabel);
     elements.sessionPreviewTime.textContent = formatDateTime(session.updatedAt);
+    const activities = sessionPreviewActivities(session);
+    elements.sessionPreviewActivityTitle.textContent = Array.isArray(session.activities) && session.activities.length
+      ? `执行流程 · ${activities.length} 步`
+      : '会话概况';
     elements.sessionPreviewActivity.replaceChildren(
-      ...sessionPreviewActivities(session).map(createPreviewActivity),
+      ...activities.map(createPreviewActivity),
     );
 
     elements.sessionPreviewProjectAction.dataset.sessionId = session.id;

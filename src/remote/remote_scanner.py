@@ -66,6 +66,128 @@ def prompt_from_record(record):
     return clean(text)
 
 
+def content_text(value, limit=220):
+    parts = []
+
+    def collect(item):
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, list):
+            for child in item:
+                collect(child)
+        elif isinstance(item, dict):
+            if isinstance(item.get("text"), str):
+                parts.append(item["text"])
+            elif "content" in item:
+                collect(item["content"])
+
+    collect(value)
+    return clean(" ".join(parts), limit)
+
+
+def activity_from_record(record):
+    if not isinstance(record, dict) or record.get("type") != "event_msg":
+        return None
+    payload = record.get("payload")
+    if not isinstance(payload, dict) or payload.get("type") != "item_completed":
+        return None
+    item = payload.get("item")
+    if not isinstance(item, dict):
+        return None
+    item_type = item.get("type")
+    timestamp = parse_time(record.get("timestamp"))
+    if timestamp is None and isinstance(payload.get("completed_at_ms"), (int, float)):
+        completed = float(payload["completed_at_ms"])
+        timestamp = completed / 1000 if completed > 1e12 else completed
+
+    def activity(kind, label, text):
+        return {
+            "kind": kind,
+            "label": label,
+            "text": text,
+            "timestamp": int((timestamp or 0) * 1000),
+        }
+
+    if item_type == "UserMessage":
+        text = content_text(item.get("content"))
+        return activity("prompt", "提问", text) if text else None
+    if item_type == "AgentMessage":
+        text = content_text(item.get("content"), 240)
+        if not text:
+            return None
+        if item.get("phase") == "commentary":
+            return activity("progress", "进展", text)
+        if item.get("phase") == "final_answer":
+            return activity("complete", "回复", text)
+        return activity("message", "回复", text)
+    if item_type == "CommandExecution":
+        command = item.get("command")
+        if isinstance(command, list):
+            parts = [part for part in command if isinstance(part, str)]
+            if len(parts) >= 3 and parts[1] in ("-c", "-lc"):
+                command = parts[-1]
+            else:
+                command = " ".join(parts)
+        text = clean(command, 220)
+        if not text:
+            return None
+        failed = item.get("status") == "failed" or (
+            isinstance(item.get("exit_code"), int) and item["exit_code"] != 0
+        )
+        return activity("failed", "命令失败", text) if failed else activity("command", "执行命令", text)
+    if item_type == "FileChange":
+        changes = item.get("changes")
+        if not isinstance(changes, dict) or not changes:
+            return None
+        names = [os.path.basename(path) or path for path in list(changes)[:4]]
+        suffix = " 等 {} 个文件".format(len(changes)) if len(changes) > len(names) else ""
+        text = clean("、".join(names) + suffix, 220)
+        failed = item.get("status") == "failed"
+        return activity("failed", "修改失败", text) if failed else activity("file", "修改文件", text)
+    if item_type == "McpToolCall":
+        arguments = item.get("arguments")
+        title = arguments.get("title") if isinstance(arguments, dict) else None
+        text = clean(title, 180) or clean(
+            "{} · {}".format(item.get("server") or "MCP", item.get("tool") or "tool"), 180
+        )
+        failed = item.get("status") == "failed"
+        return activity("failed", "工具失败", text) if failed else activity("tool", "调用工具", text)
+    if item_type == "ImageView":
+        path = item.get("path")
+        if not isinstance(path, str):
+            return None
+        return activity("image", "查看图片", clean(os.path.basename(path), 180) or path)
+    if item_type == "ContextCompaction":
+        return activity("context", "整理上下文", "压缩较早的会话内容以继续处理")
+    if item_type == "Reasoning":
+        text = content_text(item.get("summary_text"))
+        return activity("reasoning", "分析", text) if text else None
+    return None
+
+
+def extract_activities(data):
+    activities = []
+    for raw in data.splitlines():
+        item = activity_from_record(json_line(raw))
+        if not item:
+            continue
+        if item["kind"] == "prompt":
+            activities = []
+        activities.append(item)
+    maximum = 24
+    if len(activities) <= maximum:
+        return activities
+    tail_count = maximum - 2
+    omitted = len(activities) - 1 - tail_count
+    marker = {
+        "kind": "more",
+        "label": "省略",
+        "text": "还有 {} 个较早的中间步骤".format(omitted),
+        "timestamp": activities[-tail_count]["timestamp"],
+    }
+    return [activities[0], marker] + activities[-tail_count:]
+
+
 def decode_argument(value):
     if not isinstance(value, str):
         return ""
@@ -263,9 +385,10 @@ def detect_state(path, approval_mode, active_pid, working_child, modified_at, no
             data = data.split(b"\n", 1)[1]
     except OSError:
         state = "active" if active_pid else "failed"
-        return state, "Codex 正在运行" if active_pid else "会话记录不可读", modified_at, None, None
+        return state, "Codex 正在运行" if active_pid else "会话记录不可读", modified_at, None, None, []
 
     lines = data.splitlines()
+    activities = extract_activities(data)
     unfinished = False
     found_boundary = False
     terminal_state = None
@@ -330,16 +453,16 @@ def detect_state(path, approval_mode, active_pid, working_child, modified_at, no
         unfinished = True
     if unfinished:
         if latest_call and needs_attention(latest_call, approval_mode, working_child, now):
-            return "attention", attention_detail(latest_call["name"]), latest_call.get("started_at") or updated_at, last_prompt_value, None
+            return "attention", attention_detail(latest_call["name"]), latest_call.get("started_at") or updated_at, last_prompt_value, None, activities
         if active_pid or now - modified_at < 12:
             detail = "正在执行命令" if working_child else "Codex 正在思考与执行"
-            return "active", detail, updated_at, last_prompt_value, None
-        return "failed", "会话意外停止，没有完成事件", updated_at, last_prompt_value, None
+            return "active", detail, updated_at, last_prompt_value, None, activities
+        return "failed", "会话意外停止，没有完成事件", updated_at, last_prompt_value, None, activities
     if terminal_state:
-        return terminal_state, terminal_detail, updated_at, last_prompt_value, completion_token
+        return terminal_state, terminal_detail, updated_at, last_prompt_value, completion_token, activities
     if active_pid:
-        return "active", "Codex 会话已启动", updated_at, last_prompt_value, None
-    return "completed", "会话当前空闲", updated_at, last_prompt_value, None
+        return "active", "Codex 会话已启动", updated_at, last_prompt_value, None, activities
+    return "completed", "会话当前空闲", updated_at, last_prompt_value, None, activities
 
 
 def open_database(database_path):
@@ -529,7 +652,7 @@ def main():
         modified_at = os.path.getmtime(path)
         pid = active_paths.get(path)
         working_child = has_working_child(pid, children, commands) if pid else False
-        state, detail, updated_at, prompt, completion_token = detect_state(
+        state, detail, updated_at, prompt, completion_token, activities = detect_state(
             path, row["approval_mode"] or "never", pid, working_child, modified_at, now
         )
         prompt = prompt or latest_prompt(path) or clean(row["fallback_prompt"]) or clean(row["title"]) or row["id"]
@@ -543,6 +666,7 @@ def main():
             "state": state,
             "detail": detail,
             "updatedAt": updated_at * 1000,
+            "activities": activities,
         }
         if row["model"]:
             item["model"] = row["model"]
