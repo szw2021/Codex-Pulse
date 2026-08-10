@@ -10,7 +10,8 @@
     "package": "tauri build --bundles app",
     "make": "TAURI_BUNDLER_DMG_IGNORE_CI=true CI=true tauri build --bundles app,dmg",
     "test": "cargo test --manifest-path src-tauri/Cargo.toml",
-    "check": "cargo check --manifest-path src-tauri/Cargo.toml && node --check src/renderer/theme-bootstrap.js && node --check src/renderer/tauri-bridge.js && node --check src/renderer/app.js"
+    "check:lines": ".github/scripts/check-file-lines.sh",
+    "check": "cargo check --manifest-path src-tauri/Cargo.toml && node --check src/renderer/theme-bootstrap.js && node --check src/renderer/tauri-bridge.js && node --check src/renderer/interactions.js && node --check src/renderer/app.js"
   },
   "engines": {
     "node": ">=22"

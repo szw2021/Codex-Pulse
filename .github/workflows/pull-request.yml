@@ -1,0 +1,45 @@
+name: Pull Request Checks
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Enforce file size policy
+        run: npm run check:lines
+
+      - name: Check application
+        run: npm run check
+
+      - name: Run tests
+        run: npm test
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+
+      - name: Validate remote scanner
+        run: python3 -c "compile(open('src/remote/remote_scanner.py', encoding='utf-8').read(), 'src/remote/remote_scanner.py', 'exec')"

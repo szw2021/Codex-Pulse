@@ -1,0 +1,133 @@
+name: Release After Merge
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: release v') }}"
+    runs-on: macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Resolve release version
+        id: version
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          git fetch origin main --tags
+          release_commit=$(git log origin/main \
+            --format='%H %P %s' \
+            --grep='^chore: release v' | \
+            awk -v source="$SOURCE_SHA" '$2 == source { print $1; exit }')
+          if [[ -n "$release_commit" ]]; then
+            tag=$(git tag --points-at "$release_commit" --list 'v*' | head -n 1)
+            if [[ -z "$tag" ]]; then
+              version=$(git show -s --format=%s "$release_commit" | sed -n 's/^chore: release v//p')
+              if [[ -z "$version" ]]; then
+                echo "Existing release commit has no recoverable version" >&2
+                exit 1
+              fi
+              tag="v${version}"
+              git tag "$tag" "$release_commit"
+              git push origin "$tag"
+            fi
+            git checkout "$release_commit"
+            echo "existing=true" >> "$GITHUB_OUTPUT"
+            echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          latest_tag=$(git tag --list 'v[0-9]*' --sort=-version:refname | head -n 1)
+          version=$(node .github/scripts/bump-version.mjs "$latest_tag")
+          echo "existing=false" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Enforce file size policy
+        run: npm run check:lines
+
+      - name: Check application
+        run: npm run check
+
+      - name: Run tests
+        run: npm test
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+
+      - name: Validate remote scanner
+        run: python3 -c "compile(open('src/remote/remote_scanner.py', encoding='utf-8').read(), 'src/remote/remote_scanner.py', 'exec')"
+
+      - name: Build macOS packages
+        run: |
+          npm run make
+          version="${{ steps.version.outputs.version }}"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "src-tauri/target/release/bundle/macos/Codex Pulse.app" \
+            "src-tauri/target/release/bundle/macos/Codex Pulse_${version}_aarch64.zip"
+          codesign --verify --deep --strict \
+            "src-tauri/target/release/bundle/macos/Codex Pulse.app"
+          hdiutil verify \
+            "src-tauri/target/release/bundle/dmg/Codex Pulse_${version}_aarch64.dmg"
+          unzip -t \
+            "src-tauri/target/release/bundle/macos/Codex Pulse_${version}_aarch64.zip"
+
+      - name: Commit and tag version
+        if: steps.version.outputs.existing != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json src-tauri/Cargo.toml \
+            src-tauri/Cargo.lock src-tauri/tauri.conf.json
+          git commit -m "chore: release v${VERSION}"
+          git tag "v${VERSION}"
+          git push origin HEAD:main
+          git push origin "v${VERSION}"
+
+      - name: Create release and upload packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          assets=(
+            "src-tauri/target/release/bundle/dmg/Codex Pulse_${VERSION}_aarch64.dmg"
+            "src-tauri/target/release/bundle/macos/Codex Pulse_${VERSION}_aarch64.zip"
+          )
+          if ! gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "v${VERSION}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Codex Pulse v${VERSION}" \
+              --generate-notes \
+              --verify-tag
+          fi
+          gh release upload "v${VERSION}" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
