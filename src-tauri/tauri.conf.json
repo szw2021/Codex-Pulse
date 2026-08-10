@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Codex Pulse",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "identifier": "dev.local.codex-pulse",
   "build": {
     "frontendDist": "../src/renderer"
@@ -35,7 +35,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
+    "targets": [
+      "app",
+      "dmg"
+    ],
     "category": "DeveloperTool",
     "shortDescription": "Monitor local and remote Codex CLI sessions",
     "icon": [
@@ -51,9 +54,18 @@
       "hardenedRuntime": false,
       "dmg": {
         "background": "./dmg/background.png",
-        "appPosition": { "x": 170, "y": 220 },
-        "applicationFolderPosition": { "x": 490, "y": 220 },
-        "windowSize": { "width": 660, "height": 400 }
+        "appPosition": {
+          "x": 170,
+          "y": 220
+        },
+        "applicationFolderPosition": {
+          "x": 490,
+          "y": 220
+        },
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        }
       }
     }
   }
