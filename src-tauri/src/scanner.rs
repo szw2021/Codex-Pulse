@@ -65,6 +65,11 @@ impl LocalScanner {
 
     pub fn scan_sessions(&mut self) -> Result<Vec<Session>, String> {
         let database_path = self.codex_home.join("state_5.sqlite");
+        // 未安装 Codex（无状态数据库）不算错误，直接返回空列表，
+        // 避免只用 Claude 的用户每次刷新都看到报错。
+        if !database_path.is_file() {
+            return Ok(Vec::new());
+        }
         let sessions_root = self.codex_home.join("sessions");
         let processes = active_session_processes(&sessions_root);
         let rows = query_thread_rows(&database_path).map_err(|error| {
@@ -206,6 +211,7 @@ impl LocalScanner {
                 } else {
                     row.source
                 },
+                agent: "codex".into(),
                 rollout_path: rollout_path.to_string_lossy().into_owned(),
                 state: state.state,
                 detail: state.detail,
@@ -405,7 +411,7 @@ fn thread_columns(connection: &Connection) -> Result<HashSet<String>, String> {
     }
 }
 
-fn tail_data(path: &Path, maximum: u64) -> std::io::Result<Vec<u8>> {
+pub(crate) fn tail_data(path: &Path, maximum: u64) -> std::io::Result<Vec<u8>> {
     let mut file = File::open(path)?;
     let size = file.metadata()?.len();
     let start = size.saturating_sub(maximum);
@@ -489,6 +495,7 @@ pub fn detect_state(
     let mut latest_call: Option<(String, Option<i64>)> = None;
     let mut last_prompt = None;
     let mut resolved_calls = HashSet::new();
+    let mut turn_approval_mode = None;
 
     for line in text.lines().rev().filter(|line| !line.is_empty()) {
         let Ok(root) = serde_json::from_str::<Value>(line) else {
@@ -509,6 +516,12 @@ pub fn detect_state(
             .get("type")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        if turn_approval_mode.is_none() && outer_type == "turn_context" {
+            turn_approval_mode = payload
+                .get("approval_policy")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
         if outer_type == "event_msg" {
             if !found_boundary && payload_type == "task_started" {
                 unfinished = true;
@@ -572,13 +585,14 @@ pub fn detect_state(
     }
 
     let updated_at = last_event_at.unwrap_or(file_modified_at.max(now));
+    let effective_approval_mode = turn_approval_mode.as_deref().unwrap_or(approval_mode);
     if !found_boundary && process_info.is_some() && latest_call.is_some() {
         unfinished = true;
     }
     if unfinished {
         let working = process_info.is_some_and(|info| info.has_working_child);
         if let Some((name, started_at)) = &latest_call
-            && needs_attention(name, *started_at, approval_mode, working, now)
+            && needs_attention(name, *started_at, effective_approval_mode, working, now)
         {
             return DetectedState {
                 state: "attention".into(),
@@ -715,7 +729,7 @@ fn prompt_from_record(root: &Value) -> Option<String> {
     clean_optional(&text, 500)
 }
 
-fn parse_json_timestamp(value: &Value) -> Option<i64> {
+pub(crate) fn parse_json_timestamp(value: &Value) -> Option<i64> {
     if let Some(number) = value.as_f64() {
         return Some(if number > 1e12 {
             number as i64
@@ -726,7 +740,7 @@ fn parse_json_timestamp(value: &Value) -> Option<i64> {
     value.as_str().and_then(parse_timestamp)
 }
 
-fn parse_timestamp(value: &str) -> Option<i64> {
+pub(crate) fn parse_timestamp(value: &str) -> Option<i64> {
     if let Ok(number) = value.parse::<f64>() {
         return Some(if number > 1e12 {
             number as i64
@@ -751,7 +765,7 @@ fn clean_title(value: &str, fallback_id: &str) -> String {
     }
 }
 
-pub fn clean_string(value: &str, limit: usize) -> String {
+pub(crate) fn clean_string(value: &str, limit: usize) -> String {
     let clean = value.split_whitespace().collect::<Vec<_>>().join(" ");
     if clean.chars().count() <= limit {
         clean
@@ -760,12 +774,12 @@ pub fn clean_string(value: &str, limit: usize) -> String {
     }
 }
 
-fn clean_optional(value: &str, limit: usize) -> Option<String> {
+pub(crate) fn clean_optional(value: &str, limit: usize) -> Option<String> {
     let clean = clean_string(value, limit);
     (!clean.is_empty()).then_some(clean)
 }
 
-fn expand_home(value: &str) -> PathBuf {
+pub(crate) fn expand_home(value: &str) -> PathBuf {
     if value == "~" {
         return dirs::home_dir().unwrap_or_else(|| PathBuf::from(value));
     }
@@ -777,7 +791,7 @@ fn expand_home(value: &str) -> PathBuf {
     PathBuf::from(value)
 }
 
-fn system_time_millis(value: SystemTime) -> i64 {
+pub(crate) fn system_time_millis(value: SystemTime) -> i64 {
     value
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -795,176 +809,5 @@ fn state_priority(state: &str) -> u8 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const NOW: i64 = 2_000_000_000_000;
-
-    fn record(outer: &str, payload: Value, seconds_ago: i64) -> String {
-        serde_json::json!({
-            "timestamp": chrono::DateTime::from_timestamp_millis(NOW - seconds_ago * 1000).unwrap().to_rfc3339(),
-            "type": outer,
-            "payload": payload
-        })
-        .to_string()
-    }
-
-    fn event(name: &str, seconds: i64) -> String {
-        record("event_msg", serde_json::json!({"type": name}), seconds)
-    }
-
-    fn completed_item(item: Value, seconds: i64) -> String {
-        record(
-            "event_msg",
-            serde_json::json!({"type": "item_completed", "item": item}),
-            seconds,
-        )
-    }
-
-    fn detect(
-        lines: Vec<String>,
-        approval: &str,
-        process: Option<ProcessInfo>,
-        modified: i64,
-    ) -> String {
-        detect_state(
-            lines.join("\n").as_bytes(),
-            approval,
-            process,
-            NOW - modified * 1000,
-            NOW,
-        )
-        .state
-    }
-
-    #[test]
-    fn detects_turn_states() {
-        let idle = Some(ProcessInfo {
-            pid: 7,
-            has_working_child: false,
-        });
-        let working = Some(ProcessInfo {
-            pid: 7,
-            has_working_child: true,
-        });
-        assert_eq!(
-            detect(vec![event("task_started", 5)], "never", idle, 5),
-            "active"
-        );
-        assert_eq!(
-            detect(
-                vec![event("task_started", 10), event("task_complete", 1)],
-                "on-request",
-                idle,
-                1
-            ),
-            "completed"
-        );
-        let call = record(
-            "response_item",
-            serde_json::json!({"type":"function_call","call_id":"call-1","name":"exec_command"}),
-            5,
-        );
-        assert_eq!(
-            detect(
-                vec![event("task_started", 10), call.clone()],
-                "on-request",
-                idle,
-                5
-            ),
-            "attention"
-        );
-        assert_eq!(
-            detect(
-                vec![event("task_started", 10), call],
-                "on-request",
-                working,
-                5
-            ),
-            "active"
-        );
-        assert_eq!(
-            detect(vec![event("task_started", 30)], "never", None, 30),
-            "failed"
-        );
-    }
-
-    #[test]
-    fn extracts_latest_prompt_and_completion() {
-        let input = record(
-            "event_msg",
-            serde_json::json!({"type":"user_message","message":" 第一行\n第二行 "}),
-            9,
-        );
-        let complete = record(
-            "event_msg",
-            serde_json::json!({"type":"task_complete","turn_id":"turn-123"}),
-            1,
-        );
-        let result = detect_state(
-            [event("task_started", 10), input, complete]
-                .join("\n")
-                .as_bytes(),
-            "never",
-            Some(ProcessInfo {
-                pid: 7,
-                has_working_child: false,
-            }),
-            NOW - 1000,
-            NOW,
-        );
-        assert_eq!(result.last_prompt.as_deref(), Some("第一行 第二行"));
-        assert_eq!(result.completion_token.as_deref(), Some("turn-123"));
-    }
-
-    #[test]
-    fn extracts_real_activities_from_latest_turn() {
-        let old_command = completed_item(
-            serde_json::json!({
-                "type": "CommandExecution",
-                "command": ["/bin/zsh", "-lc", "old command"],
-                "status": "completed",
-                "exit_code": 0
-            }),
-            20,
-        );
-        let prompt = completed_item(
-            serde_json::json!({
-                "type": "UserMessage",
-                "content": [{"type": "text", "text": "优化详情流程"}]
-            }),
-            10,
-        );
-        let command = completed_item(
-            serde_json::json!({
-                "type": "CommandExecution",
-                "command": ["/bin/zsh", "-lc", "cargo test"],
-                "status": "completed",
-                "exit_code": 0
-            }),
-            5,
-        );
-        let file_change = completed_item(
-            serde_json::json!({
-                "type": "FileChange",
-                "changes": {"/tmp/app.js": {"type": "update"}},
-                "status": "completed"
-            }),
-            2,
-        );
-        let activities = extract_activities(
-            [old_command, prompt, command, file_change]
-                .join("\n")
-                .as_bytes(),
-        );
-        assert_eq!(
-            activities
-                .iter()
-                .map(|item| item.kind.as_str())
-                .collect::<Vec<_>>(),
-            vec!["prompt", "command", "file"]
-        );
-        assert_eq!(activities[1].text, "cargo test");
-        assert_eq!(activities[2].text, "app.js");
-    }
-}
+#[path = "scanner_tests.rs"]
+mod tests;

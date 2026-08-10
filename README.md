@@ -1,6 +1,6 @@
 # Codex Pulse
 
-Codex Pulse 是一个基于 Tauri 的轻量 macOS 菜单栏应用，用来集中查看本机与远程服务器上的 Codex CLI 会话：
+Codex Pulse 是一个基于 Tauri 的轻量 macOS 菜单栏应用，用来集中查看本机与远程服务器上的 Codex CLI 与 Claude Code 会话：
 
 - 正在进行：本轮任务尚未结束，并且 Codex 进程仍持有会话文件；
 - 等待处理：存在等待选择、审批或确认的工具调用；
@@ -49,7 +49,7 @@ src-tauri/target/release/bundle/dmg/Codex Pulse_0.2.0_aarch64.dmg
 
 也可以使用 `./scripts/build-app.sh` 将 `.app` 复制到 `dist/Codex Pulse.app`。
 
-首次点击“在终端中继续”时，macOS 可能请求允许 Codex Pulse 控制 Terminal。此权限只用于执行 `codex resume <session-id>`。
+首次点击“在终端中继续”时，macOS 可能请求允许 Codex Pulse 控制 Terminal。此权限只用于执行 `codex resume <session-id>` 或 `claude --resume <session-id>`。
 
 ## YOLO 模式
 
@@ -57,9 +57,10 @@ src-tauri/target/release/bundle/dmg/Codex Pulse_0.2.0_aarch64.dmg
 
 ```bash
 codex resume --dangerously-bypass-approvals-and-sandbox <session-id>
+claude --resume <session-id> --dangerously-skip-permissions
 ```
 
-此参数会跳过确认并关闭 Codex 沙箱，只应在工作目录已经可靠隔离时开启。
+此参数会跳过确认并关闭沙箱，只应在工作目录已经可靠隔离时开启。
 
 ## 测试
 
@@ -74,4 +75,6 @@ npm run check
 
 独立运行的 Codex CLI 不会把实时 app-server 事件转发给监控进程，因此 Codex Pulse 采用只读检测：结合 JSONL 事件、审批策略、会话文件占用和子进程状态判断任务状态。
 
-本地扫描与状态管理位于 `src-tauri/src/`，远程适配会把 `src/remote/remote_scanner.py` 编译进 Rust 二进制，并通过 SSH 标准输入发送到服务器执行，不在远程服务器写入脚本文件。
+Claude Code 2.1.139+ 优先通过 `claude agents --json` 按会话 ID 读取运行、等待和空闲状态；旧版本或命令不可用时，再解析 `~/.claude/projects` 下的 `last-prompt`、`turn_duration` 等回合边界记录，并以进程工作目录作为兼容回退。Claude 会话暂不支持重命名与删除。
+
+本地扫描与状态管理位于 `src-tauri/src/`，远程适配会把 `src/remote/remote_scanner.py` 编译进 Rust 二进制，并通过 SSH 标准输入发送到服务器执行，不在远程服务器写入脚本文件。远程机器上只装 Codex 或只装 Claude 都可以正常扫描。

@@ -1,6 +1,7 @@
 import atexit
 import base64
 import datetime
+import glob
 import json
 import os
 import signal
@@ -337,13 +338,17 @@ def writer_context(pid, parents, commands, ttys):
 def has_working_child(pid, children, commands):
     queue = list(children.get(pid, []))
     visited = set()
-    helpers = {"codex", "node", "codex-code-mode-host"}
+    # 常驻辅助进程不算"正在干活"，但它们的子进程（真正在跑的命令）算。
+    # claude 的常驻子进程包括快照 shell（zsh/bash）与 caffeinate。
+    helpers = {"codex", "node", "codex-code-mode-host", "claude", "caffeinate", "zsh", "bash", "sh"}
     while queue:
         child = queue.pop()
         if child in visited:
             continue
         visited.add(child)
-        if commands.get(child, "").lower() not in helpers:
+        tokens = commands.get(child, "").split()
+        name = os.path.basename(tokens[0]).lower() if tokens else ""
+        if name not in helpers:
             return True
         queue.extend(children.get(child, []))
     return False
@@ -398,6 +403,7 @@ def detect_state(path, approval_mode, active_pid, working_child, modified_at, no
     last_prompt_value = None
     resolved_calls = set()
     latest_call = None
+    turn_approval_mode = None
 
     for raw in reversed(lines):
         root = json_line(raw)
@@ -411,6 +417,8 @@ def detect_state(path, approval_mode, active_pid, working_child, modified_at, no
             last_event_at = timestamp
         outer_type = root.get("type")
         payload_type = payload.get("type")
+        if turn_approval_mode is None and outer_type == "turn_context":
+            turn_approval_mode = payload.get("approval_policy")
         if last_prompt_value is None:
             last_prompt_value = prompt_from_record(root)
         if outer_type == "event_msg":
@@ -452,7 +460,7 @@ def detect_state(path, approval_mode, active_pid, working_child, modified_at, no
     if not found_boundary and active_pid and latest_call:
         unfinished = True
     if unfinished:
-        if latest_call and needs_attention(latest_call, approval_mode, working_child, now):
+        if latest_call and needs_attention(latest_call, turn_approval_mode or approval_mode, working_child, now):
             return "attention", attention_detail(latest_call["name"]), latest_call.get("started_at") or updated_at, last_prompt_value, None, activities
         if active_pid or now - modified_at < 12:
             detail = "正在执行命令" if working_child else "Codex 正在思考与执行"
@@ -554,10 +562,12 @@ def terminate_session(database_path, sessions_root, session_id, encoded_pid):
     print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
 
 
-def manage_session(database_path, sessions_root, action, encoded_id, encoded_value=""):
+def manage_session(database_path, sessions_root, action, encoded_id, encoded_value="", agent=""):
     session_id = clean(decode_argument(encoded_id), 200)
     if not session_id:
         raise ValueError("会话 ID 无效")
+    if agent == "claude" and action in ("rename", "archive"):
+        raise ValueError("Claude 会话暂不支持{}".format("重命名" if action == "rename" else "删除"))
     if action == "terminate":
         terminate_session(database_path, sessions_root, session_id, encoded_value)
         return
@@ -598,20 +608,321 @@ def manage_session(database_path, sessions_root, action, encoded_id, encoded_val
         connection.close()
 
 
+def tail_bytes(path, maximum):
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - maximum))
+            data = handle.read()
+        if size > len(data) and b"\n" in data:
+            data = data.split(b"\n", 1)[1]
+        return data
+    except OSError:
+        return None
+
+
+def collect_claude_jsonl(projects_root):
+    entries = []
+    pattern = os.path.join(projects_root, "*", "*.jsonl")
+    for full in glob.glob(pattern):
+        try:
+            entries.append((full, os.path.getmtime(full), os.path.getsize(full)))
+        except OSError:
+            continue
+    entries.sort(key=lambda item: item[1], reverse=True)
+    return entries[:100]
+
+
+def claude_processes(commands):
+    env = os.environ.copy()
+    env["PATH"] = ":".join((
+        "/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin"),
+        os.path.expanduser("~/.npm-global/bin"), env.get("PATH", ""),
+    ))
+    try:
+        result = subprocess.run(
+            ["claude", "agents", "--json"], stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, timeout=3, env=env
+        )
+        rows = json.loads(result.stdout) if result.returncode == 0 else None
+        if isinstance(rows, list):
+            exact = {
+                row["sessionId"]: (row["pid"], str(row.get("status", "unknown")).lower())
+                for row in rows if isinstance(row, dict)
+                and isinstance(row.get("sessionId"), str)
+                and isinstance(row.get("pid"), int) and row["pid"] > 0
+            }
+            if not rows or exact:
+                return exact, {}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+
+    # 旧版 Claude 没有精确 sessionId 状态，按 cwd 回退。
+    cwds = {}
+    if os.path.isdir("/proc"):
+        for pid, command in commands.items():
+            tokens = command.split()
+            names = {os.path.basename(token).lower() for token in tokens[:2]}
+            if "claude" not in names:
+                continue
+            try:
+                cwds.setdefault(os.path.realpath("/proc/{}/cwd".format(pid)), []).append(pid)
+            except OSError:
+                pass
+        return None, cwds
+    try:
+        output = subprocess.run(
+            ["lsof", "-a", "-d", "cwd", "-c", "claude", "-F", "pn"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=5
+        ).stdout
+        pid = None
+        for line in output.splitlines():
+            if line.startswith("p"):
+                pid = int(line[1:])
+            elif line.startswith("n") and pid:
+                cwds.setdefault(os.path.realpath(line[1:]), []).append(pid)
+                pid = None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return None, cwds
+
+
+CLAUDE_META_PREFIXES = ("<command-", "<local-command", "<system-reminder>", "Caveat:")
+
+
+def claude_user_event(record):
+    message = record.get("message")
+    if not isinstance(message, dict):
+        return None
+    content = message.get("content")
+    if isinstance(content, str):
+        if content.startswith("[Request interrupted by user"):
+            return ("interrupt", None)
+        if content.lstrip().startswith(CLAUDE_META_PREFIXES):
+            return None
+        text = clean(content, 500)
+        return ("prompt", text) if text else ("tool_result", None)
+    if not isinstance(content, list):
+        return None
+    items = [item for item in content if isinstance(item, dict)]
+    texts = [item["text"] for item in items
+             if item.get("type") in ("text", "input_text")
+             and isinstance(item.get("text"), str)]
+    if any(text.startswith("[Request interrupted by user") for text in texts):
+        return ("interrupt", None)
+    joined = " ".join(texts)
+    if joined.lstrip().startswith(CLAUDE_META_PREFIXES):
+        return None
+    text = clean(joined, 500)
+    if text:
+        return ("prompt", text)
+    return ("tool_result", None) if any(item.get("type") == "tool_result" for item in items) else None
+
+
+def analyze_claude_transcript(data):
+    info = {
+        "sessionId": None, "cwd": "", "title": None, "lastPrompt": None,
+        "permissionMode": "", "lastTimestamp": None, "sawTurnMarker": False,
+        "turnOpen": False, "endsWithInterrupt": False, "danglingTool": None,
+        "trailingTextUuid": None, "mainActivity": False, "anyActivity": False,
+    }
+    for raw in data.splitlines():
+        record = json_line(raw) if raw.strip() else None
+        if not isinstance(record, dict):
+            continue
+        if isinstance(record.get("sessionId"), str):
+            info["sessionId"] = record["sessionId"]
+        # 取第一条 cwd（会话启动目录）：后续记录会随 shell 切目录漂移
+        if not info["cwd"] and isinstance(record.get("cwd"), str) and record["cwd"]:
+            info["cwd"] = record["cwd"]
+        ts = parse_time(record.get("timestamp"))
+        if ts is not None:
+            info["lastTimestamp"] = ts
+        if isinstance(record.get("permissionMode"), str):
+            info["permissionMode"] = record["permissionMode"]
+        record_type = record.get("type")
+        sidechain = record.get("isSidechain") is True
+        if record_type == "ai-title" and isinstance(record.get("aiTitle"), str):
+            info["title"] = clean(record["aiTitle"], 100)
+        elif record_type == "last-prompt":
+            if isinstance(record.get("lastPrompt"), str):
+                info["lastPrompt"] = clean(record["lastPrompt"], 500) or info["lastPrompt"]
+            info.update(sawTurnMarker=True, turnOpen=False, endsWithInterrupt=False, danglingTool=None)
+        elif record_type == "user" and record.get("isMeta") is not True:
+            event = claude_user_event(record)
+            if event is None:
+                continue
+            info.update(anyActivity=True, turnOpen=True, danglingTool=None, trailingTextUuid=None)
+            info["mainActivity"] = info["mainActivity"] or not sidechain
+            info["endsWithInterrupt"] = event[0] == "interrupt"
+            if event[0] == "prompt" and not sidechain:
+                info["lastPrompt"] = event[1]
+        elif record_type == "assistant":
+            info.update(anyActivity=True, turnOpen=True, endsWithInterrupt=False,
+                        danglingTool=None, trailingTextUuid=None)
+            info["mainActivity"] = info["mainActivity"] or not sidechain
+            message = record.get("message")
+            content = message.get("content") if isinstance(message, dict) else None
+            last_item = next((item for item in reversed(content)
+                              if isinstance(item, dict) and item.get("type")), {}) \
+                if isinstance(content, list) else {}
+            kind = "text" if isinstance(content, str) and content.strip() else last_item.get("type")
+            if kind == "tool_use":
+                info["danglingTool"] = last_item.get("name") or "tool"
+            elif kind == "text":
+                uuid = record.get("uuid")
+                info["trailingTextUuid"] = uuid if isinstance(uuid, str) else None
+        elif record_type == "system" and record.get("subtype") == "turn_duration":
+            info.update(sawTurnMarker=True, turnOpen=False, endsWithInterrupt=False,
+                        danglingTool=None)
+    info["sidechainOnly"] = info["anyActivity"] and not info["mainActivity"]
+    return info
+
+
+def claude_attention_detail(tool, mode):
+    # 长时间运行的内部工具（Task/WebFetch 等）不会弹确认，不算等待
+    if mode == "bypassPermissions":
+        return None
+    lower = tool.lower()
+    if "askuserquestion" in lower:
+        return "Claude 正在等待你的选择"
+    if "exitplanmode" in lower:
+        return "计划等待确认"
+    if "edit" in lower or "write" in lower:
+        return None if mode == "acceptEdits" else "文件修改等待确认"
+    if "bash" in lower:
+        return "命令执行等待确认"
+    if lower.startswith("mcp__"):
+        return "外部工具调用等待确认"
+    return None
+
+
+def resolve_claude_state(info, pid, working_child, modified_at, now, agent_status=None):
+    updated_at = info["lastTimestamp"] if info["lastTimestamp"] is not None else (modified_at or now)
+
+    def result(state, detail, token=None, occupied=False):
+        return {"state": state, "detail": detail, "updatedAt": int(updated_at * 1000),
+                "completionToken": token, "occupied": occupied}
+
+    def completed(occupied=False):
+        token = info["trailingTextUuid"]
+        return result("completed", "本轮任务已完成" if token else "会话当前空闲",
+                      token, occupied)
+
+    if info["endsWithInterrupt"]:
+        return result("failed", "任务已中止", occupied=agent_status is not None)
+    status = "".join(character for character in (agent_status or "") if character.isalnum())
+    if status in ("active", "running", "working"):
+        return result("active", "正在执行命令" if working_child else "Claude 正在思考与执行",
+                      occupied=True)
+    if status in ("attention", "blocked", "needsinput", "waiting"):
+        detail = claude_attention_detail(info["danglingTool"] or "", info["permissionMode"])
+        return result("attention", detail or "Claude 正在等待你的操作", occupied=True)
+    if status in ("completed", "done", "idle"):
+        return completed(occupied=True)
+    if status in ("error", "failed", "cancelled", "stopped", "terminated"):
+        return result("failed", "Claude 会话执行失败", occupied=True)
+    if not info["turnOpen"]:
+        # 回合已结束：立即算完成，不做 60 秒冷却
+        return completed()
+    recent = modified_at is not None and now - modified_at < 60
+    if pid:
+        if not recent and not working_child and info["danglingTool"]:
+            detail = claude_attention_detail(info["danglingTool"], info["permissionMode"])
+            if detail:
+                return result("attention", detail, occupied=True)
+        return result("active", "正在执行命令" if working_child else "Claude 正在思考与执行",
+                      occupied=True)
+    if recent:
+        return result("active", "Claude 正在处理")
+    if info["sawTurnMarker"]:
+        return result("failed", "会话意外停止，没有完成事件")
+    return completed()
+
+
+def scan_claude_sessions(claude_home, now, children, commands, parents, ttys):
+    projects_root = os.path.join(claude_home, "projects")
+    entries = collect_claude_jsonl(projects_root)
+    if not entries:
+        return []
+    exact_processes, process_cwds = claude_processes(commands)
+    sessions = []
+    for path, modified_at, _size in entries:
+        data = tail_bytes(path, 524288)
+        if not data:
+            continue
+        info = analyze_claude_transcript(data)
+        if info["sidechainOnly"] or not info["cwd"]:
+            continue
+        session_id = info["sessionId"] or os.path.splitext(os.path.basename(path))[0]
+        exact = exact_processes.get(session_id) if exact_processes is not None else None
+        pids = process_cwds.get(os.path.realpath(info["cwd"]), []) if exact_processes is None else []
+        pid = exact[0] if exact else (pids[0] if pids else None)
+        agent_status = exact[1] if exact else None
+        working = any(has_working_child(p, children, commands) for p in pids)
+        if exact:
+            working = has_working_child(pid, children, commands)
+        result = resolve_claude_state(info, pid, working, modified_at, now, agent_status)
+        title = info["title"] or "Claude 会话 {}".format(session_id[:8])
+        item = {
+            "id": session_id,
+            "title": title,
+            "lastPrompt": info["lastPrompt"] or title,
+            "cwd": info["cwd"],
+            "projectName": os.path.basename(info["cwd"].rstrip(os.sep)) or info["cwd"],
+            "state": result["state"],
+            "detail": result["detail"],
+            "updatedAt": result["updatedAt"],
+            "agent": "claude",
+        }
+        if result["completionToken"]:
+            item["completionToken"] = result["completionToken"]
+        # 精确状态中的 idle 进程仍持有会话，保留 PID 防止并发恢复。
+        if pid and result["occupied"]:
+            item["pid"] = pid
+            owner, tty = writer_context(pid, parents, commands, ttys)
+            item["writerOwner"] = owner
+            if tty:
+                item["writerTty"] = tty
+        sessions.append(item)
+    return sessions
+
+
 def main():
     codex_home = os.path.abspath(os.path.expanduser(os.environ.get("CODEX_HOME", "~/.codex")))
     database_path = os.path.join(codex_home, "state_5.sqlite")
     sessions_root = os.path.join(codex_home, "sessions")
     if len(sys.argv) > 1:
+        agent = sys.argv[4] if len(sys.argv) > 4 else ""
         manage_session(
             database_path,
             sessions_root,
             sys.argv[1],
             sys.argv[2] if len(sys.argv) > 2 else "",
             sys.argv[3] if len(sys.argv) > 3 else "",
+            agent,
         )
         return
     active_paths, children, commands, parents, ttys = process_snapshot(sessions_root)
+    now = time.time()
+    sessions = []
+    # 远程可能只装了 Claude：没有 Codex 状态数据库不算错误，跳过 Codex 扫描
+    if os.path.isfile(database_path):
+        scan_codex_sessions(
+            sessions, database_path, active_paths, children, commands, parents, ttys, now
+        )
+    claude_home = os.path.abspath(os.path.expanduser(os.environ.get("CLAUDE_HOME", "~/.claude")))
+    try:
+        sessions.extend(scan_claude_sessions(claude_home, now, children, commands, parents, ttys))
+    except Exception:
+        # Claude scanning must never break Codex results; if the remote has no
+        # ~/.claude or the install differs, just skip silently.
+        pass
+    print(json.dumps({"sessions": sessions}, ensure_ascii=False, separators=(",", ":")))
+
+
+def scan_codex_sessions(sessions, database_path, active_paths, children, commands, parents, ttys, now):
     connection = open_database(database_path)
     connection.row_factory = sqlite3.Row
     columns = {row[1] for row in connection.execute("PRAGMA table_info(threads)").fetchall()}
@@ -643,8 +954,6 @@ def main():
         prompt=prompt_expression, where=where,
     )
     rows = connection.execute(query).fetchall()
-    now = time.time()
-    sessions = []
     for row in rows:
         path = os.path.abspath(os.path.expanduser(row["rollout_path"] or ""))
         if not path or not os.path.isfile(path):
@@ -667,6 +976,7 @@ def main():
             "detail": detail,
             "updatedAt": updated_at * 1000,
             "activities": activities,
+            "agent": "codex",
         }
         if row["model"]:
             item["model"] = row["model"]
@@ -680,7 +990,6 @@ def main():
             item["completionToken"] = completion_token
         sessions.append(item)
     connection.close()
-    print(json.dumps({"sessions": sessions}, ensure_ascii=False, separators=(",", ":")))
 
 
 if __name__ == "__main__":

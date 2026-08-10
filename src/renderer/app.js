@@ -3,7 +3,7 @@
     active: { label: '进行中', mark: '∿' },
     completed_pending: { label: '刚完成', mark: '✓' },
     completed: { label: '已完成', mark: '·' },
-    attention: { label: '等待处理', mark: '!' },
+    attention: { label: '待确认', mark: '!' },
     failed: { label: '执行失败', mark: '×' },
   };
 
@@ -97,6 +97,7 @@
     sessionPreviewClose: document.querySelector('#session-preview-close'),
     sessionPreviewTitle: document.querySelector('#session-preview-title'),
     sessionPreviewStatus: document.querySelector('#session-preview-status'),
+    sessionPreviewAgent: document.querySelector('#session-preview-agent'),
     sessionPreviewRelativeTime: document.querySelector('#session-preview-relative-time'),
     sessionPreviewModel: document.querySelector('#session-preview-model'),
     sessionPreviewId: document.querySelector('#session-preview-id'),
@@ -107,6 +108,20 @@
     sessionPreviewProjectAction: document.querySelector('#session-preview-project-action'),
     sessionPreviewTerminalAction: document.querySelector('#session-preview-terminal-action'),
   };
+
+  const AGENT_META = {
+    codex: {
+      id: 'codex',
+      label: 'Codex',
+      svg: '<path d="M12 4 L20 18 L4 18 Z" fill="currentColor"/>',
+    },
+    claude: {
+      id: 'claude',
+      label: 'Claude',
+      svg: '<g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v18"/><path d="M3 12h18"/><path d="M5.6 5.6l12.8 12.8"/><path d="M18.4 5.6L5.6 18.4"/></g>',
+    },
+  };
+  const agentMeta = agent => AGENT_META[agent] || AGENT_META.codex;
 
   const bridge = (action, details = {}) => window.codexPulse?.send(action, details);
 
@@ -320,7 +335,7 @@
         name.textContent = host;
         const detail = document.createElement('small');
         const sessionCount = appState.remoteSessions.filter(session => session.remoteHost === host).length;
-        detail.textContent = appState.remoteErrors[host] || `${sessionCount} 个 Codex 会话`;
+        detail.textContent = appState.remoteErrors[host] || `${sessionCount} 个会话`;
         copy.append(name, detail);
         const connect = document.createElement('button');
         connect.textContent = '连接';
@@ -472,16 +487,16 @@
     delete elements.emptyAction.dataset.host;
     if (appState.remoteLoading && sessions.length === 0) {
       icon.textContent = '⇄';
-      title.textContent = '正在读取 Codex 会话';
+      title.textContent = '正在读取会话';
       detail.textContent = '正在同步本地和已配置的远程服务器。';
     } else if (error) {
       icon.textContent = '!';
-      title.textContent = '无法读取 Codex 会话';
+      title.textContent = '无法读取会话';
       detail.textContent = error;
     } else if (sessions.length === 0) {
       icon.textContent = '>_';
-      title.textContent = '还没有 Codex 会话';
-      detail.textContent = '本地或服务器上的 Codex 会话会统一出现在这里。';
+      title.textContent = '还没有会话';
+      detail.textContent = '本地或服务器上的 Codex 与 Claude 会话会统一出现在这里。';
     } else if (!appState.query && appState.filter === 'focus') {
       icon.textContent = '✓';
       title.textContent = '没有需要关注的会话';
@@ -547,10 +562,15 @@
 
     const detail = document.createElement('div');
     detail.className = 'row-meta';
+    const agent = agentMeta(session.agent);
+    const agentBadge = document.createElement('span');
+    agentBadge.className = 'agent-badge';
+    agentBadge.dataset.agent = agent.id;
+    agentBadge.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${agent.svg}</svg><span>${agent.label}</span>`;
     const stateLabel = document.createElement('span');
     stateLabel.className = 'state-label';
     stateLabel.textContent = meta.label;
-    detail.append(stateLabel);
+    detail.append(agentBadge, stateLabel);
 
     const project = document.createElement('span');
     project.className = 'project';
@@ -735,6 +755,10 @@
       : (session.projectName || session.cwd || '—');
 
     elements.sessionPreviewDialog.dataset.state = session.state;
+    const agent = agentMeta(session.agent);
+    elements.sessionPreviewAgent.className = `agent-badge preview-agent-badge`;
+    elements.sessionPreviewAgent.dataset.agent = agent.id;
+    elements.sessionPreviewAgent.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${agent.svg}</svg><span>${agent.label}</span>`;
     elements.sessionPreviewTitle.textContent = session.lastPrompt || session.title || '无标题会话';
     elements.sessionPreviewTitle.title = elements.sessionPreviewTitle.textContent;
     elements.sessionPreviewStatus.textContent = meta.label;
@@ -855,14 +879,21 @@
       });
     }
     addSeparator();
-    addAction('重命名…', () => openRenameModal({
+    const claudeSession = session.agent === 'claude';
+    addAction(claudeSession ? 'Claude 会话暂不支持重命名' : '重命名…', () => openRenameModal({
       id: session.id,
       currentName: session.title || session.lastPrompt || '',
-    }));
-    addAction(deletionBlocked ? '运行中不可删除' : '删除会话…', () => {
-      const confirmed = window.confirm('确定删除这个会话吗？\n\n会话会被归档并从列表中移除，原始会话日志不会被删除。');
-      if (confirmed) bridge('archiveSession', { id: session.id });
-    }, { disabled: deletionBlocked, danger: !deletionBlocked });
+    }), { disabled: claudeSession });
+    addAction(
+      deletionBlocked
+        ? '运行中不可删除'
+        : (claudeSession ? 'Claude 会话暂不支持删除' : '删除会话…'),
+      () => {
+        const confirmed = window.confirm('确定删除这个会话吗？\n\n会话会被归档并从列表中移除，原始会话日志不会被删除。');
+        if (confirmed) bridge('archiveSession', { id: session.id });
+      },
+      { disabled: deletionBlocked || claudeSession, danger: !deletionBlocked && !claudeSession },
+    );
 
     elements.menu.hidden = true;
     elements.sessionContextMenu.replaceChildren(...items);

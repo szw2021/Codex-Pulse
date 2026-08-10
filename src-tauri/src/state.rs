@@ -12,6 +12,7 @@ use std::{
 use tauri::{AppHandle, Emitter};
 
 use crate::{
+    claude_scanner::ClaudeScanner,
     models::{DisplayLimits, PublishedState, Session, Settings},
     remote,
     scanner::{LocalScanner, clean_string},
@@ -22,6 +23,7 @@ use crate::{
 pub struct AppState {
     inner: Arc<Mutex<Inner>>,
     scanner: Arc<Mutex<LocalScanner>>,
+    claude_scanner: Arc<Mutex<ClaudeScanner>>,
     settings_path: Arc<PathBuf>,
     local_refreshing: Arc<AtomicBool>,
     remote_refreshing: Arc<AtomicBool>,
@@ -40,7 +42,7 @@ struct Inner {
 }
 
 impl AppState {
-    pub fn new(codex_home: PathBuf, settings_path: PathBuf) -> Self {
+    pub fn new(codex_home: PathBuf, claude_home: PathBuf, settings_path: PathBuf) -> Self {
         let loaded = settings::load(&settings_path);
         Self {
             inner: Arc::new(Mutex::new(Inner {
@@ -55,6 +57,7 @@ impl AppState {
                 remote_generation: 0,
             })),
             scanner: Arc::new(Mutex::new(LocalScanner::new(codex_home))),
+            claude_scanner: Arc::new(Mutex::new(ClaudeScanner::new(claude_home))),
             settings_path: Arc::new(settings_path),
             local_refreshing: Arc::new(AtomicBool::new(false)),
             remote_refreshing: Arc::new(AtomicBool::new(false)),
@@ -97,18 +100,33 @@ impl AppState {
         if self.local_refreshing.swap(true, Ordering::AcqRel) {
             return;
         }
-        let result = self
+        let codex_result = self
             .scanner
             .lock()
             .map_err(|_| "本地扫描器状态不可用".to_string())
             .and_then(|mut scanner| scanner.scan_sessions());
+        let claude_result = self
+            .claude_scanner
+            .lock()
+            .map_err(|_| "Claude 扫描器状态不可用".to_string())
+            .and_then(|mut scanner| scanner.scan_sessions());
         if let Ok(mut inner) = self.inner.lock() {
-            match result {
+            match codex_result {
                 Ok(sessions) => {
                     inner.local_sessions = sessions;
                     inner.local_error = None;
                 }
-                Err(error) => inner.local_error = Some(error),
+                Err(error) => {
+                    inner.local_error = Some(error);
+                    // 保留上一轮 Codex 结果，但先移除旧的 Claude 条目，
+                    // 避免下面的 extend 每次刷新都累积重复会话。
+                    inner.local_sessions.retain(|session| session.agent != "claude");
+                }
+            }
+            // Claude scan failures are non-fatal: Claude may not be installed.
+            // Merge whatever Claude sessions we got on top of the Codex ones.
+            if let Ok(claude_sessions) = claude_result {
+                inner.local_sessions.extend(claude_sessions);
             }
         }
         self.local_refreshing.store(false, Ordering::Release);
@@ -329,12 +347,16 @@ impl AppState {
         if name.is_empty() {
             return Err("会话名称不能为空".into());
         }
+        if session.agent == "claude" {
+            return Err("Claude 会话暂不支持重命名".into());
+        }
         if session.source == "remote" {
             remote::manage_session(
                 session.remote_host.as_deref().unwrap_or_default(),
                 "rename",
                 session.remote_session_id.as_deref().unwrap_or_default(),
                 &name,
+                &session.agent,
             )?;
         } else {
             self.scanner
@@ -362,12 +384,16 @@ impl AppState {
         if session.resume_blocked() {
             return Err("运行中或等待处理的会话不可删除".into());
         }
+        if session.agent == "claude" {
+            return Err("Claude 会话暂不支持删除".into());
+        }
         if session.source == "remote" {
             remote::manage_session(
                 session.remote_host.as_deref().unwrap_or_default(),
                 "archive",
                 session.remote_session_id.as_deref().unwrap_or_default(),
                 "",
+                &session.agent,
             )?;
         } else {
             self.scanner
@@ -392,6 +418,7 @@ impl AppState {
             "terminate",
             session.remote_session_id.as_deref().unwrap_or_default(),
             &session.pid.unwrap_or_default().to_string(),
+            &session.agent,
         )?;
         Ok(session)
     }
@@ -513,6 +540,7 @@ mod tests {
             cwd: "/tmp".into(),
             project_name: "tmp".into(),
             source: "cli".into(),
+            agent: "codex".into(),
             rollout_path: String::new(),
             state: state.into(),
             detail: String::new(),
