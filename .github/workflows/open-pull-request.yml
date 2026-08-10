@@ -36,10 +36,14 @@ jobs:
             title=$(git log -1 --format=%s)
             summary=$(git log origin/main..HEAD --pretty='- %s')
             body=$(printf '## Changes\n\n%s\n\n## Verification\n\nRequired Pull Request checks must pass before merge.\n' "$summary")
-            gh pr create \
+            if ! create_output=$(gh pr create \
               --repo "$REPOSITORY" \
               --head "$BRANCH" \
               --base main \
               --title "$title" \
-              --body "$body"
+              --body "$body" 2>&1); then
+              create_output=${create_output//$'\n'/ }
+              echo "::error title=Unable to create Pull Request::$create_output"
+              exit 1
+            fi
           fi
