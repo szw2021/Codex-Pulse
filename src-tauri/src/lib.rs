@@ -2,6 +2,8 @@ mod commands;
 mod models;
 mod remote;
 mod scanner;
+mod session_activity;
+mod session_process;
 mod settings;
 mod state;
 

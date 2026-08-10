@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Pulse 产品设计"
+  short_description: "为 Codex Pulse 设计高密度、低打扰、聚焦任务状态的界面体验"
+  default_prompt: "Use $design-codex-pulse to refine this Codex Pulse interface."

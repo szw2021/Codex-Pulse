@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Pulse 工程实现"
+  short_description: "按本地远程一致性、会话安全和千行限制实现 Codex Pulse 变更"
+  default_prompt: "Use $develop-codex-pulse to implement this Codex Pulse change safely."

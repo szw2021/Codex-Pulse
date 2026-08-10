@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Pulse 分支与发布"
+  short_description: "通过功能分支、Pull Request 和自动发布流水线交付 Codex Pulse 变更"
+  default_prompt: "Use $release-codex-pulse to deliver this Codex Pulse change through a pull request."
