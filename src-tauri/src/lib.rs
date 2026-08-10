@@ -233,8 +233,7 @@ fn set_window_height(app: &AppHandle, requested: f64) -> Result<(), String> {
         .clamp(WINDOW_MIN_HEIGHT, WINDOW_MAX_HEIGHT.min(available));
     window
         .set_size(LogicalSize::new(WINDOW_WIDTH, height))
-        .map_err(|error| error.to_string())?;
-    position_window(&window)
+        .map_err(|error| error.to_string())
 }
 
 fn position_window(window: &tauri::WebviewWindow) -> Result<(), String> {
