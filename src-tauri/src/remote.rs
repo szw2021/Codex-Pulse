@@ -44,9 +44,17 @@ pub fn manage_session(
     action: &str,
     session_id: &str,
     value: &str,
+    agent: &str,
 ) -> Result<(), String> {
     if !matches!(action, "rename" | "archive" | "terminate") {
         return Err("远程会话操作无效".into());
+    }
+    if agent == "claude" && matches!(action, "rename" | "archive") {
+        return Err(if action == "rename" {
+            "Claude 会话暂不支持重命名".into()
+        } else {
+            "Claude 会话暂不支持删除".into()
+        });
     }
     let session_id = clean_string(session_id, 200);
     let value = clean_string(value, 100);
@@ -63,6 +71,7 @@ pub fn manage_session(
         action.to_string(),
         URL_SAFE_NO_PAD.encode(session_id),
         URL_SAFE_NO_PAD.encode(value),
+        agent.to_string(),
     ];
     let output = run_script(host, &arguments)?;
     let root = parse_json_result(&output).ok_or("远程服务器返回了无法识别的数据")?;
@@ -198,6 +207,7 @@ fn sessions_from_json(data: &[u8], host: &str) -> Result<Vec<Session>, String> {
             }),
             cwd,
             source: "remote".into(),
+            agent: json_text(item, "agent", 20).unwrap_or_else(|| "codex".into()),
             rollout_path: String::new(),
             detail: json_text(item, "detail", 500).unwrap_or_else(|| "远程会话".into()),
             updated_at: item
@@ -430,5 +440,16 @@ mod tests {
         );
         assert_eq!(sessions[0].activities.len(), 1);
         assert_eq!(sessions[0].activities[0].text, "cargo test");
+    }
+
+    #[test]
+    fn parses_remote_claude_agent() {
+        let data = r#"{"sessions":[{"id":"claude-id","agent":"claude","title":"Claude 标题","lastPrompt":"最近提问","cwd":"/srv/app","state":"completed","updatedAt":42}]}"#;
+        let sessions = sessions_from_json(data.as_bytes(), "dev-box").unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].agent, "claude");
+        assert_eq!(sessions[0].source, "remote");
+        assert_eq!(sessions[0].project_name, "app");
+        assert_eq!(sessions[0].id, "remote:dev-box:claude-id");
     }
 }

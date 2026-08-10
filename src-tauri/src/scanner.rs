@@ -65,6 +65,11 @@ impl LocalScanner {
 
     pub fn scan_sessions(&mut self) -> Result<Vec<Session>, String> {
         let database_path = self.codex_home.join("state_5.sqlite");
+        // 未安装 Codex（无状态数据库）不算错误，直接返回空列表，
+        // 避免只用 Claude 的用户每次刷新都看到报错。
+        if !database_path.is_file() {
+            return Ok(Vec::new());
+        }
         let sessions_root = self.codex_home.join("sessions");
         let processes = active_session_processes(&sessions_root);
         let rows = query_thread_rows(&database_path).map_err(|error| {
@@ -206,6 +211,7 @@ impl LocalScanner {
                 } else {
                     row.source
                 },
+                agent: "codex".into(),
                 rollout_path: rollout_path.to_string_lossy().into_owned(),
                 state: state.state,
                 detail: state.detail,
@@ -405,7 +411,7 @@ fn thread_columns(connection: &Connection) -> Result<HashSet<String>, String> {
     }
 }
 
-fn tail_data(path: &Path, maximum: u64) -> std::io::Result<Vec<u8>> {
+pub(crate) fn tail_data(path: &Path, maximum: u64) -> std::io::Result<Vec<u8>> {
     let mut file = File::open(path)?;
     let size = file.metadata()?.len();
     let start = size.saturating_sub(maximum);
@@ -715,7 +721,7 @@ fn prompt_from_record(root: &Value) -> Option<String> {
     clean_optional(&text, 500)
 }
 
-fn parse_json_timestamp(value: &Value) -> Option<i64> {
+pub(crate) fn parse_json_timestamp(value: &Value) -> Option<i64> {
     if let Some(number) = value.as_f64() {
         return Some(if number > 1e12 {
             number as i64
@@ -726,7 +732,7 @@ fn parse_json_timestamp(value: &Value) -> Option<i64> {
     value.as_str().and_then(parse_timestamp)
 }
 
-fn parse_timestamp(value: &str) -> Option<i64> {
+pub(crate) fn parse_timestamp(value: &str) -> Option<i64> {
     if let Ok(number) = value.parse::<f64>() {
         return Some(if number > 1e12 {
             number as i64
@@ -751,7 +757,7 @@ fn clean_title(value: &str, fallback_id: &str) -> String {
     }
 }
 
-pub fn clean_string(value: &str, limit: usize) -> String {
+pub(crate) fn clean_string(value: &str, limit: usize) -> String {
     let clean = value.split_whitespace().collect::<Vec<_>>().join(" ");
     if clean.chars().count() <= limit {
         clean
@@ -760,12 +766,12 @@ pub fn clean_string(value: &str, limit: usize) -> String {
     }
 }
 
-fn clean_optional(value: &str, limit: usize) -> Option<String> {
+pub(crate) fn clean_optional(value: &str, limit: usize) -> Option<String> {
     let clean = clean_string(value, limit);
     (!clean.is_empty()).then_some(clean)
 }
 
-fn expand_home(value: &str) -> PathBuf {
+pub(crate) fn expand_home(value: &str) -> PathBuf {
     if value == "~" {
         return dirs::home_dir().unwrap_or_else(|| PathBuf::from(value));
     }
@@ -777,7 +783,7 @@ fn expand_home(value: &str) -> PathBuf {
     PathBuf::from(value)
 }
 
-fn system_time_millis(value: SystemTime) -> i64 {
+pub(crate) fn system_time_millis(value: SystemTime) -> i64 {
     value
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

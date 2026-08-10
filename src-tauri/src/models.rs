@@ -2,6 +2,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+fn default_agent() -> String {
+    "codex".into()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionActivity {
@@ -21,6 +25,8 @@ pub struct Session {
     pub cwd: String,
     pub project_name: String,
     pub source: String,
+    #[serde(default = "default_agent")]
+    pub agent: String,
     pub rollout_path: String,
     pub state: String,
     pub detail: String,

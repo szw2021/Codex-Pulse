@@ -1,3 +1,4 @@
+mod claude_scanner;
 mod commands;
 mod models;
 mod remote;
@@ -142,9 +143,14 @@ fn handle_session_action(action: &str, payload: &Value, state: &AppState) -> Res
             } else {
                 "原终端"
             });
+        let agent_label = if session.agent == "claude" {
+            "Claude"
+        } else {
+            "Codex"
+        };
         return Err(if session.has_active_writer() {
             format!(
-                "检测到 Codex 进程 {} 仍在{owner}中持有这个会话。请回到原终端继续，或结束原进程后再恢复。",
+                "检测到 {agent_label} 进程 {} 仍在{owner}中持有这个会话。请回到原终端继续，或结束原进程后再恢复。",
                 session.pid.unwrap_or_default()
             )
         } else {
@@ -153,8 +159,22 @@ fn handle_session_action(action: &str, payload: &Value, state: &AppState) -> Res
     }
     let yolo = state.settings().yolo_enabled;
     match action {
-        "resume" => commands::launch_terminal(&commands::resume_command(&session, yolo)),
-        "copy" => copy_to_clipboard(&commands::resume_command(&session, yolo)),
+        "resume" => {
+            let command = if session.agent == "claude" {
+                commands::claude_resume_command(&session, yolo)
+            } else {
+                commands::resume_command(&session, yolo)
+            };
+            commands::launch_terminal(&command)
+        }
+        "copy" => {
+            let command = if session.agent == "claude" {
+                commands::claude_resume_command(&session, yolo)
+            } else {
+                commands::resume_command(&session, yolo)
+            };
+            copy_to_clipboard(&command)
+        }
         "reveal" => commands::reveal_in_finder(&session.cwd),
         "remoteResume" => {
             commands::launch_terminal(&commands::remote_resume_command(&session, yolo))
@@ -364,7 +384,11 @@ pub fn run() {
                 .map(PathBuf::from)
                 .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))
                 .unwrap_or_else(|| PathBuf::from(".codex"));
-            let state = AppState::new(codex_home, settings::default_settings_path());
+            let claude_home = env::var_os("CLAUDE_HOME")
+                .map(PathBuf::from)
+                .or_else(|| dirs::home_dir().map(|home| home.join(".claude")))
+                .unwrap_or_else(|| PathBuf::from(".claude"));
+            let state = AppState::new(codex_home, claude_home, settings::default_settings_path());
             let pinned = state.settings().window_pinned;
             app.manage(state.clone());
             setup_tray(app)?;
