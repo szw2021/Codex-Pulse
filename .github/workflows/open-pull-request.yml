@@ -31,19 +31,27 @@ jobs:
             --state open \
             --json number \
             --jq 'length')
-          if [[ "$count" == "0" ]]; then
-            git fetch origin main
-            title=$(git log -1 --format=%s)
-            summary=$(git log origin/main..HEAD --pretty='- %s')
-            body=$(printf '## Changes\n\n%s\n\n## Verification\n\nRequired Pull Request checks must pass before merge.\n' "$summary")
-            if ! create_output=$(gh pr create \
-              --repo "$REPOSITORY" \
-              --head "$BRANCH" \
-              --base main \
-              --title "$title" \
-              --body "$body" 2>&1); then
-              create_output=${create_output//$'\n'/ }
-              echo "::error title=Unable to create Pull Request::$create_output"
-              exit 1
+          if [[ "$count" != "0" ]]; then
+            echo "An open Pull Request already exists for $BRANCH."
+            exit 0
+          fi
+
+          git fetch origin main
+          title=$(git log -1 --format=%s)
+          summary=$(git log origin/main..HEAD --pretty='- %s')
+          body=$(printf '## Changes\n\n%s\n\n## Verification\n\nRequired Pull Request checks must pass before merge.\n' "$summary")
+          if ! create_output=$(gh pr create \
+            --repo "$REPOSITORY" \
+            --head "$BRANCH" \
+            --base main \
+            --title "$title" \
+            --body "$body" 2>&1); then
+            create_output=${create_output//$'\n'/ }
+            if [[ "$create_output" == *"GitHub Actions is not permitted to create or approve pull requests"* ]]; then
+              echo "::warning title=Automatic Pull Request creation is disabled::$create_output Enable 'Allow GitHub Actions to create and approve pull requests' under Settings > Actions > General > Workflow permissions, or open the Pull Request manually."
+              exit 0
             fi
+
+            echo "::error title=Unable to create Pull Request::$create_output"
+            exit 1
           fi
