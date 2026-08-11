@@ -495,7 +495,7 @@ dependencies = [
 
 [[package]]
 name = "codex-pulse"
-version = "0.2.10"
+version = "0.2.11"
 dependencies = [
  "arboard",
  "base64 0.22.1",
