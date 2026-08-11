@@ -84,6 +84,43 @@ class RemoteApprovalStateTests(unittest.TestCase):
             "active",
         )
 
+    def test_scans_user_threads_from_cli_desktop_and_ide(self):
+        with tempfile.TemporaryDirectory() as root:
+            database = Path(root) / "state_5.sqlite"
+            connection = REMOTE_SCANNER.sqlite3.connect(database)
+            connection.execute(
+                "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, "
+                "updated_at INTEGER NOT NULL, source TEXT NOT NULL, thread_source TEXT, "
+                "title TEXT, archived INTEGER NOT NULL DEFAULT 0)"
+            )
+            entries = [
+                ("cli", "cli", "user", 0),
+                ("desktop", "app", "user", 0),
+                ("vscode", "vscode", "user", 0),
+                ("legacy", "cli", None, 0),
+                ("subagent", '{"subagent":{}}', "subagent", 0),
+                ("archived", "cli", "user", 1),
+            ]
+            for session_id, source, thread_source, archived in entries:
+                rollout = Path(root) / "{}.jsonl".format(session_id)
+                rollout.write_text(record("event_msg", {"type": "task_complete"}, 1))
+                connection.execute(
+                    "INSERT INTO threads (id, rollout_path, updated_at, source, thread_source, "
+                    "title, archived) VALUES (?, ?, 1, ?, ?, '', ?)",
+                    (session_id, str(rollout), source, thread_source, archived),
+                )
+            connection.commit()
+            connection.close()
+
+            sessions = []
+            REMOTE_SCANNER.scan_codex_sessions(
+                sessions, str(database), {}, {}, {}, {}, {}, NOW
+            )
+            self.assertEqual(
+                {session["id"] for session in sessions},
+                {"cli", "desktop", "vscode", "legacy"},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
