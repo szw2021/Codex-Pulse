@@ -234,7 +234,7 @@ fn claude_agent_status(value: &str) -> ClaudeAgentStatus {
 
 fn process_tree() -> HashMap<u32, Vec<(u32, String)>> {
     let ps = Command::new("/bin/ps")
-        .args(["-axo", "pid=,ppid=,comm="])
+        .args(["-axo", "pid=,ppid=,command="])
         .output()
         .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
         .unwrap_or_default();
@@ -264,7 +264,8 @@ fn has_working_descendant(root: u32, tree: &HashMap<u32, Vec<(u32, String)>>) ->
         // 常驻辅助进程不算"正在干活"，但它们的子进程（真正在跑的命令）算。
         // claude 的常驻子进程包括快照 shell（zsh/bash）与 caffeinate。
         let lower = command.to_lowercase();
-        let name = lower.rsplit('/').next().unwrap_or(&lower);
+        let executable = lower.split_whitespace().next().unwrap_or(&lower);
+        let name = executable.rsplit('/').next().unwrap_or(executable);
         let helper = matches!(
             name,
             "codex"
@@ -276,7 +277,8 @@ fn has_working_descendant(root: u32, tree: &HashMap<u32, Vec<(u32, String)>>) ->
                 | "bash"
                 | "sh"
         );
-        if !helper {
+        let persistent_service = lower.contains("mcp") && lower.contains("server");
+        if !helper && !persistent_service {
             return true;
         }
         queue.extend(tree.get(&pid).cloned().unwrap_or_default());
@@ -314,5 +316,23 @@ mod tests {
     fn rejects_legacy_agent_definition_output() {
         let data = br#"[{"name":"reviewer","description":"Reviews code"}]"#;
         assert!(parse_claude_agents(data, &HashMap::new()).is_none());
+    }
+
+    #[test]
+    fn ignores_persistent_mcp_server_but_detects_real_command() {
+        let mut tree = HashMap::from([(
+            1,
+            vec![(
+                2,
+                "/opt/homebrew/bin/npm exec apifox-mcp-server@latest".into(),
+            )],
+        )]);
+        assert!(!has_working_descendant(1, &tree));
+
+        tree.get_mut(&1)
+            .unwrap()
+            .push((3, "/bin/zsh -lc sleep 30".into()));
+        tree.insert(3, vec![(4, "/bin/sleep 30".into())]);
+        assert!(has_working_descendant(1, &tree));
     }
 }

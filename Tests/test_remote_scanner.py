@@ -51,6 +51,16 @@ def exec_call():
 
 
 class RemoteApprovalStateTests(unittest.TestCase):
+    def test_persistent_mcp_server_is_not_working_command(self):
+        children = {1: [2], 2: []}
+        commands = {2: "npm exec apifox-mcp-server@latest --project-id=123"}
+        self.assertFalse(REMOTE_SCANNER.has_working_child(1, children, commands))
+
+        children[1].append(3)
+        children[3] = [4]
+        commands.update({3: "/bin/zsh -lc sleep 30", 4: "/bin/sleep 30"})
+        self.assertTrue(REMOTE_SCANNER.has_working_child(1, children, commands))
+
     def test_current_turn_approval_overrides_stale_database_value(self):
         self.assertEqual(
             state_for([task_started(), turn_context("on-request"), exec_call()], "never"),

@@ -348,7 +348,7 @@ def has_working_child(pid, children, commands):
         visited.add(child)
         tokens = commands.get(child, "").split()
         name = os.path.basename(tokens[0]).lower() if tokens else ""
-        if name not in helpers:
+        if name not in helpers and not all(part in commands.get(child, "").lower() for part in ("mcp", "server")):
             return True
         queue.extend(children.get(child, []))
     return False
