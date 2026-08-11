@@ -941,7 +941,7 @@ def scan_codex_sessions(sessions, database_path, active_paths, children, command
     if "archived" in columns:
         conditions.append("archived = 0")
     if "source" in columns:
-        conditions.append("source = 'cli'")
+        conditions.append("(thread_source = 'user' OR (COALESCE(thread_source, '') = '' AND source = 'cli'))" if "thread_source" in columns else "source = 'cli'")
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
     query = (
         "SELECT id, rollout_path, {updated} AS updated_at, {source} AS source, {cwd} AS cwd, "

@@ -349,7 +349,11 @@ fn query_thread_rows_direct(path: &Path) -> Result<Vec<ThreadRow>, String> {
     if columns.contains("archived") {
         conditions.push("\"archived\" = 0");
     }
-    if columns.contains("source") {
+    if columns.contains("thread_source") {
+        conditions.push(
+            "(\"thread_source\" = 'user' OR (COALESCE(\"thread_source\", '') = '' AND \"source\" = 'cli'))",
+        );
+    } else if columns.contains("source") {
         conditions.push("\"source\" = 'cli'");
     }
     let where_clause = if conditions.is_empty() {

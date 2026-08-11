@@ -155,6 +155,59 @@ fn resolved_authorization_call_returns_to_active() {
 }
 
 #[test]
+fn includes_user_threads_from_all_codex_surfaces() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("state_5.sqlite");
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE threads (
+                id TEXT PRIMARY KEY,
+                rollout_path TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                source TEXT NOT NULL,
+                thread_source TEXT,
+                title TEXT,
+                archived INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .unwrap();
+    let rows = [
+        ("cli", "cli", Some("user"), 0),
+        ("desktop", "app", Some("user"), 0),
+        ("vscode", "vscode", Some("user"), 0),
+        ("legacy", "cli", None, 0),
+        ("subagent", r#"{"subagent":{}}"#, Some("subagent"), 0),
+        ("archived", "cli", Some("user"), 1),
+    ];
+    for (id, source, thread_source, archived) in rows {
+        connection
+            .execute(
+                "INSERT INTO threads (id, rollout_path, updated_at, source, thread_source, title, archived)
+                 VALUES (?1, ?2, 1, ?3, ?4, '', ?5)",
+                params![id, format!("/tmp/{id}.jsonl"), source, thread_source, archived],
+            )
+            .unwrap();
+    }
+    drop(connection);
+
+    let ids = query_thread_rows_direct(&database)
+        .unwrap()
+        .into_iter()
+        .map(|row| row.id)
+        .collect::<HashSet<_>>();
+    assert_eq!(
+        ids,
+        HashSet::from([
+            "cli".to_string(),
+            "desktop".to_string(),
+            "vscode".to_string(),
+            "legacy".to_string(),
+        ])
+    );
+}
+
+#[test]
 fn extracts_latest_prompt_and_completion() {
     let input = record(
         "event_msg",
