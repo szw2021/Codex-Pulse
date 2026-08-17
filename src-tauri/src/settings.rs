@@ -61,6 +61,7 @@ mod tests {
             &path,
             r#"{
               "windowPinned": true,
+              "notchStatusEnabled": true,
               "themeMode": "unexpected",
               "sessionTitleMode": "unexpected",
               "displayLimits": {"active": 0, "completedPending": 9, "failed": 2},
@@ -70,6 +71,7 @@ mod tests {
         .unwrap();
         let settings = load(&path);
         assert!(settings.window_pinned);
+        assert!(settings.notch_status_enabled);
         assert_eq!(settings.theme_mode, "system");
         assert_eq!(settings.session_title_mode, "prompt");
         assert_eq!(settings.display_limits.active, 4);

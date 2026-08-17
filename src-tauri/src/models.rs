@@ -100,6 +100,7 @@ impl DisplayLimits {
 pub struct Settings {
     pub yolo_enabled: bool,
     pub window_pinned: bool,
+    pub notch_status_enabled: bool,
     pub theme_mode: String,
     pub session_title_mode: String,
     pub display_limits: DisplayLimits,
@@ -114,6 +115,7 @@ impl Default for Settings {
         Self {
             yolo_enabled: false,
             window_pinned: false,
+            notch_status_enabled: false,
             theme_mode: "system".into(),
             session_title_mode: "prompt".into(),
             display_limits: DisplayLimits::default(),
@@ -164,6 +166,8 @@ pub struct PublishedState {
     pub remote_loading: bool,
     pub yolo_enabled: bool,
     pub window_pinned: bool,
+    pub notch_status_enabled: bool,
+    pub notch_status_supported: bool,
     pub theme_mode: String,
     pub session_title_mode: String,
     pub display_limits: DisplayLimits,

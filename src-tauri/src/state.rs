@@ -27,6 +27,7 @@ pub struct AppState {
     settings_path: Arc<PathBuf>,
     local_refreshing: Arc<AtomicBool>,
     remote_refreshing: Arc<AtomicBool>,
+    notch_status_supported: Arc<AtomicBool>,
 }
 
 struct Inner {
@@ -61,6 +62,7 @@ impl AppState {
             settings_path: Arc::new(settings_path),
             local_refreshing: Arc::new(AtomicBool::new(false)),
             remote_refreshing: Arc::new(AtomicBool::new(false)),
+            notch_status_supported: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -198,6 +200,8 @@ impl AppState {
     pub fn publish(&self, app: &AppHandle) {
         let published = self.published_state();
         update_tray(app, &published);
+        #[cfg(target_os = "macos")]
+        crate::notch_status::schedule_sync(app, published.notch_status_enabled);
         let _ = app.emit("codex-pulse://state", published);
     }
 
@@ -219,6 +223,8 @@ impl AppState {
             remote_loading: inner.remote_loading,
             yolo_enabled: inner.settings.yolo_enabled,
             window_pinned: inner.settings.window_pinned,
+            notch_status_enabled: inner.settings.notch_status_enabled,
+            notch_status_supported: self.notch_status_supported.load(Ordering::Acquire),
             theme_mode: inner.settings.theme_mode.clone(),
             session_title_mode: inner.settings.session_title_mode.clone(),
             display_limits: inner.settings.display_limits.clone(),
@@ -250,6 +256,19 @@ impl AppState {
 
     pub fn set_window_pinned(&self, pinned: bool) -> Result<(), String> {
         self.update_settings(|settings| settings.window_pinned = pinned)
+    }
+
+    pub fn set_notch_status_enabled(&self, enabled: bool) -> Result<(), String> {
+        self.update_settings(|settings| settings.notch_status_enabled = enabled)
+    }
+
+    pub fn notch_status_supported(&self) -> bool {
+        self.notch_status_supported.load(Ordering::Acquire)
+    }
+
+    pub fn set_notch_status_supported(&self, supported: bool) {
+        self.notch_status_supported
+            .store(supported, Ordering::Release);
     }
 
     pub fn set_theme_mode(&self, mode: &str) -> Result<(), String> {

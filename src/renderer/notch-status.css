@@ -1,0 +1,91 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  user-select: none;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+.notch-status {
+  display: flex;
+  width: 100%;
+  height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 13px 6px;
+  border: 0;
+  border-radius: 0 0 17px 17px;
+  outline: 0;
+  color: #f5f5f7;
+  background: #050506;
+  box-shadow: 0 7px 18px rgb(0 0 0 / 32%);
+  text-align: left;
+  cursor: pointer;
+  -webkit-font-smoothing: antialiased;
+}
+
+.notch-status:hover { background: #0b0b0d; }
+.notch-status:active { background: #101013; }
+.notch-status:focus-visible { box-shadow: inset 0 -2px #55a7ff, 0 7px 18px rgb(0 0 0 / 32%); }
+
+.status-mark {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 13%);
+  border-radius: 50%;
+  color: #8e8e93;
+  background: rgb(255 255 255 / 7%);
+  font: 750 12px/1 ui-monospace, "SFMono-Regular", monospace;
+}
+
+.status-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.status-copy strong,
+.status-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-copy strong { font-size: 10.5px; line-height: 13px; font-weight: 720; }
+.status-copy small { color: #9b9ba1; font-size: 8px; line-height: 10px; }
+
+.status-count {
+  min-width: 20px;
+  padding: 3px 6px;
+  border-radius: 99px;
+  color: #d7d7dc;
+  background: rgb(255 255 255 / 9%);
+  text-align: center;
+  font: 700 8px/1 ui-monospace, "SFMono-Regular", monospace;
+}
+
+.notch-status[data-state="attention"] .status-mark { color: #ffb84d; }
+.notch-status[data-state="active"] .status-mark { color: #55a7ff; animation: status-pulse 1.8s ease-in-out infinite; }
+.notch-status[data-state="completed_pending"] .status-mark { color: #55d187; }
+.notch-status[data-state="failed"] .status-mark { color: #ff6961; }
+
+@keyframes status-pulse {
+  50% { border-color: rgb(85 167 255 / 55%); box-shadow: 0 0 9px rgb(85 167 255 / 24%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notch-status[data-state="active"] .status-mark { animation: none; }
+}

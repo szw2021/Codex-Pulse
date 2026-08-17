@@ -199,6 +199,11 @@
       render();
       bridge('setYolo', { enabled: appState.yoloEnabled });
     });
+    elements.notchStatusToggle.addEventListener('click', event => {
+      event.stopPropagation();
+      if (elements.notchStatusToggle.disabled) return;
+      bridge('setNotchStatus', { enabled: !appState.notchStatusEnabled });
+    });
     document.querySelectorAll('[data-session-title-mode]').forEach(button => {
       button.addEventListener('click', event => {
         event.stopPropagation();

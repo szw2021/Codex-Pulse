@@ -222,6 +222,10 @@ input, textarea, [contenteditable="true"] {
 .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--muted); transition: transform 140ms ease, background 140ms ease; }
 .mode-toggle.enabled .switch { background: color-mix(in srgb, var(--failed) 35%, transparent); }
 .mode-toggle.enabled .switch::after { transform: translateX(12px); background: var(--failed); }
+.notch-toggle.enabled .switch { background: color-mix(in srgb, var(--active) 35%, transparent); }
+.notch-toggle.enabled .switch::after { background: var(--active); }
+.menu .mode-toggle:disabled { opacity: 0.48; cursor: default; }
+.menu .mode-toggle:disabled:hover { background: transparent; }
 .menu-divider { height: 1px; margin: 3px 4px; background: var(--line); }
 
 .session-context-menu {

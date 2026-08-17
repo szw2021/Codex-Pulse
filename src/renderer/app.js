@@ -47,6 +47,8 @@
     remoteLoading: false,
     yoloEnabled: false,
     windowPinned: false,
+    notchStatusEnabled: false,
+    notchStatusSupported: false,
     themeMode: 'system',
     sessionTitleMode: 'prompt',
     displayLimits: { ...defaultDisplayLimits },
@@ -69,6 +71,8 @@
     menu: document.querySelector('#menu'),
     yoloToggle: document.querySelector('#yolo-toggle'),
     yoloBadge: document.querySelector('#yolo-badge'),
+    notchStatusToggle: document.querySelector('#notch-status-toggle'),
+    notchStatusHint: document.querySelector('#notch-status-hint'),
     manageRemoteMenu: document.querySelector('#manage-remote-menu'),
     remoteModal: document.querySelector('#remote-modal'),
     remoteModalClose: document.querySelector('#remote-modal-close'),
@@ -203,6 +207,12 @@
     appState.remoteLoading = Boolean(payload.remoteLoading);
     if (typeof payload.yoloEnabled === 'boolean') appState.yoloEnabled = payload.yoloEnabled;
     if (typeof payload.windowPinned === 'boolean') appState.windowPinned = payload.windowPinned;
+    if (typeof payload.notchStatusEnabled === 'boolean') {
+      appState.notchStatusEnabled = payload.notchStatusEnabled;
+    }
+    if (typeof payload.notchStatusSupported === 'boolean') {
+      appState.notchStatusSupported = payload.notchStatusSupported;
+    }
     if (['light', 'dark', 'system'].includes(payload.themeMode)) {
       appState.themeMode = payload.themeMode;
     }
@@ -232,6 +242,12 @@
     elements.yoloToggle.classList.toggle('enabled', appState.yoloEnabled);
     elements.yoloToggle.setAttribute('aria-checked', String(appState.yoloEnabled));
     elements.yoloBadge.hidden = !appState.yoloEnabled;
+    elements.notchStatusToggle.classList.toggle('enabled', appState.notchStatusEnabled);
+    elements.notchStatusToggle.setAttribute('aria-checked', String(appState.notchStatusEnabled));
+    elements.notchStatusToggle.disabled = !appState.notchStatusSupported && !appState.notchStatusEnabled;
+    elements.notchStatusHint.textContent = appState.notchStatusSupported
+      ? '在刘海下方显示会话状态'
+      : (appState.notchStatusEnabled ? '等待可用的刘海屏幕' : '当前没有检测到刘海屏幕');
     elements.pinButton.classList.toggle('selected', appState.windowPinned);
     elements.pinButton.setAttribute('aria-pressed', String(appState.windowPinned));
     elements.pinButton.title = appState.windowPinned ? '取消固定' : '固定窗口';
