@@ -46,6 +46,7 @@
             </div>
           </div>
           <button id="display-settings-menu">显示设置…</button>
+          <button id="codex-home-menu">本机 Codex 数据目录…</button>
           <div class="menu-divider"></div>
           <button id="manage-remote-menu">管理远程服务器</button>
           <div class="menu-divider"></div>
@@ -139,6 +140,27 @@
           <input id="rename-input" type="text" required maxlength="100" autocomplete="off" aria-label="会话名称">
           <div class="rename-actions">
             <button type="button" id="rename-cancel">取消</button>
+            <button type="submit">保存</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="codex-home-modal" hidden>
+      <section class="codex-home-dialog" role="dialog" aria-modal="true" aria-labelledby="codex-home-title">
+        <header>
+          <strong id="codex-home-title">本机 Codex 数据目录</strong>
+          <button type="button" id="codex-home-close" aria-label="关闭">×</button>
+        </header>
+        <form id="codex-home-form">
+          <label class="codex-home-field">
+            <span>目录</span>
+            <input id="codex-home-input" type="text" required autocomplete="off" spellcheck="false" aria-label="Codex 数据目录">
+          </label>
+          <p class="codex-home-source" id="codex-home-source"></p>
+          <div class="codex-home-actions">
+            <button type="button" id="codex-home-reset">恢复默认</button>
+            <button type="button" id="codex-home-cancel">取消</button>
             <button type="submit">保存</button>
           </div>
         </form>

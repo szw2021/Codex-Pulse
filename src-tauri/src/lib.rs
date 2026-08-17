@@ -75,6 +75,11 @@ async fn handle_action(
             state.set_session_title_mode(&required_text(&payload, "mode")?)?;
             state.publish(&app);
         }
+        "setCodexHome" => {
+            state.set_codex_home(&required_text(&payload, "codexHome")?)?;
+            state.publish(&app);
+            state.trigger_local_refresh(&app);
+        }
         "setDisplayPreferences" => {
             let limits = payload.get("displayLimits").cloned().unwrap_or(Value::Null);
             state.set_display_preferences(
@@ -158,12 +163,13 @@ fn handle_session_action(action: &str, payload: &Value, state: &AppState) -> Res
         });
     }
     let yolo = state.settings().yolo_enabled;
+    let codex_home = state.codex_home();
     match action {
         "resume" => {
             let command = if session.agent == "claude" {
                 commands::claude_resume_command(&session, yolo)
             } else {
-                commands::resume_command(&session, yolo)
+                commands::resume_command(&session, yolo, &codex_home)
             };
             commands::launch_terminal(&command)
         }
@@ -171,7 +177,7 @@ fn handle_session_action(action: &str, payload: &Value, state: &AppState) -> Res
             let command = if session.agent == "claude" {
                 commands::claude_resume_command(&session, yolo)
             } else {
-                commands::resume_command(&session, yolo)
+                commands::resume_command(&session, yolo, &codex_home)
             };
             copy_to_clipboard(&command)
         }

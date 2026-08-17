@@ -49,6 +49,9 @@
     windowPinned: false,
     themeMode: 'system',
     sessionTitleMode: 'prompt',
+    codexHome: '',
+    defaultCodexHome: '',
+    codexHomeCustom: false,
     displayLimits: { ...defaultDisplayLimits },
     titleLines: 1,
     previewSessionId: null,
@@ -89,6 +92,14 @@
     displaySettingsForm: document.querySelector('#display-settings-form'),
     displaySettingsCancel: document.querySelector('#display-settings-cancel'),
     focusLimitTotal: document.querySelector('#focus-limit-total'),
+    codexHomeMenu: document.querySelector('#codex-home-menu'),
+    codexHomeModal: document.querySelector('#codex-home-modal'),
+    codexHomeClose: document.querySelector('#codex-home-close'),
+    codexHomeForm: document.querySelector('#codex-home-form'),
+    codexHomeInput: document.querySelector('#codex-home-input'),
+    codexHomeSource: document.querySelector('#codex-home-source'),
+    codexHomeReset: document.querySelector('#codex-home-reset'),
+    codexHomeCancel: document.querySelector('#codex-home-cancel'),
     emptyAction: document.querySelector('#empty-action'),
     health: document.querySelector('#health-dot'),
     sessionContextMenu: document.querySelector('#session-context-menu'),
@@ -173,6 +184,8 @@
         height = Math.max(listHeight, 440);
       } else if (!elements.displaySettingsModal.hidden) {
         height = Math.max(listHeight, 430);
+      } else if (!elements.codexHomeModal.hidden) {
+        height = Math.max(listHeight, 300);
       }
       const normalized = Math.max(190, Math.min(1600, Math.round(height)));
       if (normalized === lastRequestedHeight) return;
@@ -209,6 +222,11 @@
     if (payload.sessionTitleMode === 'prompt' || payload.sessionTitleMode === 'title') {
       appState.sessionTitleMode = payload.sessionTitleMode;
     }
+    appState.codexHome = typeof payload.codexHome === 'string' ? payload.codexHome : '';
+    appState.defaultCodexHome = typeof payload.defaultCodexHome === 'string'
+      ? payload.defaultCodexHome
+      : appState.codexHome;
+    appState.codexHomeCustom = Boolean(payload.codexHomeCustom);
     const receivedLimits = payload.displayLimits && typeof payload.displayLimits === 'object'
       ? payload.displayLimits
       : {};
@@ -804,6 +822,7 @@
     elements.remoteModal.hidden = true;
     elements.renameModal.hidden = true;
     elements.displaySettingsModal.hidden = true;
+    elements.codexHomeModal.hidden = true;
     appState.previewSessionId = session.id;
     renderSessionPreview(session);
     elements.sessionPreviewModal.hidden = false;

@@ -28,6 +28,27 @@ pub fn default_settings_path() -> PathBuf {
     }
 }
 
+pub fn expand_codex_home(value: &str, home: &Path) -> Result<PathBuf, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("Codex 数据目录不能为空".into());
+    }
+    if value.chars().any(char::is_control) {
+        return Err("Codex 数据目录包含无效字符".into());
+    }
+    let path = if value == "~" {
+        home.to_path_buf()
+    } else if let Some(relative) = value.strip_prefix("~/") {
+        home.join(relative)
+    } else {
+        PathBuf::from(value)
+    };
+    if !path.is_absolute() {
+        return Err("请输入绝对路径，或使用 ~/ 开头的路径".into());
+    }
+    Ok(path)
+}
+
 pub fn load(path: &Path) -> Settings {
     let parsed = fs::read_to_string(path)
         .ok()
@@ -63,6 +84,7 @@ mod tests {
               "windowPinned": true,
               "themeMode": "unexpected",
               "sessionTitleMode": "unexpected",
+              "codexHome": "  /tmp/custom-codex  ",
               "displayLimits": {"active": 0, "completedPending": 9, "failed": 2},
               "titleLines": 2
             }"#,
@@ -72,10 +94,22 @@ mod tests {
         assert!(settings.window_pinned);
         assert_eq!(settings.theme_mode, "system");
         assert_eq!(settings.session_title_mode, "prompt");
+        assert_eq!(settings.codex_home, "/tmp/custom-codex");
         assert_eq!(settings.display_limits.active, 4);
         assert_eq!(settings.display_limits.completed_pending, 3);
         assert_eq!(settings.display_limits.failed, 2);
         assert_eq!(settings.title_lines, 2);
         assert!(settings.completion_tracking_started_at > 0);
+    }
+
+    #[test]
+    fn expands_home_and_rejects_relative_codex_paths() {
+        let home = Path::new("/Users/tester");
+        assert_eq!(
+            expand_codex_home("~/custom-codex", home).unwrap(),
+            home.join("custom-codex")
+        );
+        assert!(expand_codex_home("custom-codex", home).is_err());
+        assert!(expand_codex_home("/tmp/custom-codex", home).is_ok());
     }
 }
