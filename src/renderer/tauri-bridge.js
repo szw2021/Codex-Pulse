@@ -33,7 +33,7 @@
       const safeDetails = details && typeof details === 'object' && !Array.isArray(details)
         ? details
         : {};
-      void stateReady
+      return stateReady
         .then(() => tauri.core.invoke('handle_action', {
           payload: { action, ...safeDetails },
         }))

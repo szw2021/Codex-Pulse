@@ -38,6 +38,8 @@ struct Inner {
     remote_errors: BTreeMap<String, String>,
     remote_config_error: Option<String>,
     local_error: Option<String>,
+    local_initialized: bool,
+    remote_initialized: bool,
     remote_loading: bool,
     remote_generation: u64,
 }
@@ -54,6 +56,8 @@ impl AppState {
                 remote_errors: BTreeMap::new(),
                 remote_config_error: None,
                 local_error: None,
+                local_initialized: false,
+                remote_initialized: false,
                 remote_loading: false,
                 remote_generation: 0,
             })),
@@ -122,7 +126,9 @@ impl AppState {
                     inner.local_error = Some(error);
                     // 保留上一轮 Codex 结果，但先移除旧的 Claude 条目，
                     // 避免下面的 extend 每次刷新都累积重复会话。
-                    inner.local_sessions.retain(|session| session.agent != "claude");
+                    inner
+                        .local_sessions
+                        .retain(|session| session.agent != "claude");
                 }
             }
             // Claude scan failures are non-fatal: Claude may not be installed.
@@ -130,6 +136,7 @@ impl AppState {
             if let Ok(claude_sessions) = claude_result {
                 inner.local_sessions.extend(claude_sessions);
             }
+            inner.local_initialized = true;
         }
         self.local_refreshing.store(false, Ordering::Release);
         self.publish(app);
@@ -154,6 +161,7 @@ impl AppState {
                 inner.remote_sessions.clear();
                 inner.remote_errors.clear();
                 inner.remote_loading = false;
+                inner.remote_initialized = true;
             }
             self.remote_refreshing.store(false, Ordering::Release);
             self.publish(app);
@@ -185,6 +193,7 @@ impl AppState {
                     .into_iter()
                     .filter_map(|(host, _, error)| error.map(|error| (host, error)))
                     .collect();
+                inner.remote_initialized = true;
             } else {
                 stale = true;
             }
@@ -221,6 +230,7 @@ impl AppState {
             remote_config_error: inner.remote_config_error.clone(),
             error: inner.local_error.clone(),
             remote_loading: inner.remote_loading,
+            session_state_ready: inner.local_initialized && inner.remote_initialized,
             yolo_enabled: inner.settings.yolo_enabled,
             window_pinned: inner.settings.window_pinned,
             notch_status_enabled: inner.settings.notch_status_enabled,

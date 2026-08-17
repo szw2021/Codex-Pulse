@@ -246,7 +246,7 @@
     elements.notchStatusToggle.setAttribute('aria-checked', String(appState.notchStatusEnabled));
     elements.notchStatusToggle.disabled = !appState.notchStatusSupported && !appState.notchStatusEnabled;
     elements.notchStatusHint.textContent = appState.notchStatusSupported
-      ? '在刘海下方显示会话状态'
+      ? '会话变化时在刘海下方提示'
       : (appState.notchStatusEnabled ? '等待可用的刘海屏幕' : '当前没有检测到刘海屏幕');
     elements.pinButton.classList.toggle('selected', appState.windowPinned);
     elements.pinButton.setAttribute('aria-pressed', String(appState.windowPinned));

@@ -1,16 +1,11 @@
 (() => {
-  const priorities = new Map([
-    ['attention', 0],
-    ['active', 1],
-    ['completed_pending', 2],
-    ['failed', 3],
-  ]);
+  const DISPLAY_DURATION = 6000;
+  const RETRACT_DURATION = 180;
   const meta = {
     attention: { label: '等待处理', mark: '!' },
     active: { label: '正在进行', mark: '∿' },
     completed_pending: { label: '任务已完成', mark: '✓' },
     failed: { label: '执行失败', mark: '×' },
-    idle: { label: 'Codex Pulse', mark: '·' },
   };
   const elements = {
     root: document.querySelector('#notch-status'),
@@ -19,6 +14,15 @@
     detail: document.querySelector('#status-detail'),
     count: document.querySelector('#status-count'),
   };
+  let snapshot = null;
+  let armed = false;
+  let presenting = false;
+  let hovered = false;
+  let remaining = DISPLAY_DURATION;
+  let deadline = 0;
+  let hideTimer = 0;
+  let nativeHideTimer = 0;
+  let presentationToken = 0;
 
   function sessionSummary(session, titleMode) {
     const title = titleMode === 'title'
@@ -27,29 +31,12 @@
     return [session.projectName, title || session.detail].filter(Boolean).join(' · ');
   }
 
-  function render(payload = {}) {
-    const sessions = [
-      ...(Array.isArray(payload.sessions) ? payload.sessions : []),
-      ...(Array.isArray(payload.remoteSessions) ? payload.remoteSessions : []),
-    ].filter(session => priorities.has(session?.state));
-    sessions.sort((left, right) => {
-      const priority = priorities.get(left.state) - priorities.get(right.state);
-      return priority || (Number(right.updatedAt) || 0) - (Number(left.updatedAt) || 0);
-    });
-
-    const remoteErrors = payload.remoteErrors && typeof payload.remoteErrors === 'object'
-      ? Object.keys(payload.remoteErrors).length
-      : 0;
-    const scannerErrors = remoteErrors + Number(typeof payload.error === 'string');
-    const selected = sessions[0];
-    const state = selected?.state || (scannerErrors ? 'failed' : 'idle');
-    const stateMeta = meta[state] || meta.idle;
-    const detail = selected
-      ? sessionSummary(selected, payload.sessionTitleMode) || selected.detail || '会话状态已更新'
-      : (scannerErrors ? `${scannerErrors} 个扫描错误` : '当前没有需要关注的会话');
-    const focusCount = sessions.length + scannerErrors;
-
-    elements.root.dataset.state = state;
+  function render(session, payload, focusCount) {
+    const stateMeta = meta[session.state];
+    const detail = sessionSummary(session, payload.sessionTitleMode)
+      || session.detail
+      || '会话状态已更新';
+    elements.root.dataset.state = session.state;
     elements.mark.textContent = stateMeta.mark;
     elements.label.textContent = stateMeta.label;
     elements.detail.textContent = detail;
@@ -59,7 +46,83 @@
     elements.root.setAttribute('aria-label', `${stateMeta.label}：${detail}；打开 Codex Pulse`);
   }
 
-  elements.root.addEventListener('click', () => window.codexPulse?.send('showMain'));
-  window.codexPulse?.onState(render);
+  function clearTimers() {
+    window.clearTimeout(hideTimer);
+    window.clearTimeout(nativeHideTimer);
+    hideTimer = 0;
+    nativeHideTimer = 0;
+  }
+
+  function dismiss(immediate = false) {
+    if (!presenting && !immediate) return;
+    presenting = false;
+    hovered = false;
+    presentationToken += 1;
+    clearTimers();
+    elements.root.classList.remove('presenting');
+    const hide = () => window.codexPulse?.send('hideNotchStatus');
+    if (immediate) hide();
+    else nativeHideTimer = window.setTimeout(hide, RETRACT_DURATION);
+  }
+
+  function scheduleDismiss() {
+    window.clearTimeout(hideTimer);
+    if (!presenting || hovered) return;
+    deadline = Date.now() + remaining;
+    hideTimer = window.setTimeout(() => dismiss(), remaining);
+  }
+
+  function present(session, payload, focusCount) {
+    clearTimers();
+    presenting = true;
+    remaining = DISPLAY_DURATION;
+    render(session, payload, focusCount);
+    const token = ++presentationToken;
+    const shown = window.codexPulse?.send('showNotchStatus');
+    Promise.resolve(shown).then(() => {
+      if (!presenting || token !== presentationToken) return;
+      elements.root.classList.remove('presenting');
+      void elements.root.offsetWidth;
+      window.requestAnimationFrame(() => {
+        if (presenting && token === presentationToken) {
+          elements.root.classList.add('presenting');
+        }
+      });
+    });
+    scheduleDismiss();
+  }
+
+  function handleState(payload = {}) {
+    const result = window.notchState.diff(snapshot, payload);
+    snapshot = result.snapshot;
+
+    if (!payload.sessionStateReady || !armed) {
+      armed = Boolean(payload.sessionStateReady);
+      dismiss(true);
+      return;
+    }
+    if (!payload.notchStatusEnabled || !payload.notchStatusSupported) {
+      dismiss(true);
+      return;
+    }
+    if (result.selected) present(result.selected, payload, result.focusCount);
+  }
+
+  elements.root.addEventListener('mouseenter', () => {
+    if (!presenting) return;
+    hovered = true;
+    remaining = Math.max(0, deadline - Date.now());
+    window.clearTimeout(hideTimer);
+  });
+  elements.root.addEventListener('mouseleave', () => {
+    if (!presenting) return;
+    hovered = false;
+    scheduleDismiss();
+  });
+  elements.root.addEventListener('click', () => {
+    window.codexPulse?.send('showMain');
+    dismiss();
+  });
+  window.codexPulse?.onState(handleState);
   window.codexPulse?.send('ready');
 })();

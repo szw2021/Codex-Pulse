@@ -54,9 +54,7 @@ pub fn sync_now(app: &AppHandle, enabled: bool) -> Result<bool, String> {
     let geometry = find_notch_geometry(marker);
     if let Some(geometry) = geometry {
         configure_window(&window, geometry)?;
-        if enabled {
-            window.show().map_err(|error| error.to_string())?;
-        } else {
+        if !enabled {
             window.hide().map_err(|error| error.to_string())?;
         }
         Ok(true)
@@ -64,6 +62,20 @@ pub fn sync_now(app: &AppHandle, enabled: bool) -> Result<bool, String> {
         window.hide().map_err(|error| error.to_string())?;
         Ok(false)
     }
+}
+
+pub fn show(app: &AppHandle) -> Result<(), String> {
+    app.get_webview_window(WINDOW_LABEL)
+        .ok_or("刘海状态窗口不可用")?
+        .show()
+        .map_err(|error| error.to_string())
+}
+
+pub fn hide(app: &AppHandle) -> Result<(), String> {
+    app.get_webview_window(WINDOW_LABEL)
+        .ok_or("刘海状态窗口不可用")?
+        .hide()
+        .map_err(|error| error.to_string())
 }
 
 pub fn schedule_sync(app: &AppHandle, enabled: bool) {

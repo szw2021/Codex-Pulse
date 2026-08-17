@@ -164,6 +164,7 @@ pub struct PublishedState {
     pub remote_config_error: Option<String>,
     pub error: Option<String>,
     pub remote_loading: bool,
+    pub session_state_ready: bool,
     pub yolo_enabled: bool,
     pub window_pinned: bool,
     pub notch_status_enabled: bool,

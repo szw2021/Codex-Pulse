@@ -117,6 +117,16 @@ async fn handle_action(
         }
         "minimize" => minimize_window(&app)?,
         "showMain" => show_window(&app)?,
+        "showNotchStatus" => {
+            #[cfg(target_os = "macos")]
+            if state.settings().notch_status_enabled && state.notch_status_supported() {
+                notch_status::show(&app)?;
+            }
+        }
+        "hideNotchStatus" => {
+            #[cfg(target_os = "macos")]
+            notch_status::hide(&app)?;
+        }
         "hide" => {
             if let Some(window) = app.get_webview_window("main") {
                 window.hide().map_err(|error| error.to_string())?;
