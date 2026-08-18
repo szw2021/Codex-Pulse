@@ -36,6 +36,7 @@
       closeSessionPreview();
       elements.remoteModal.hidden = false;
       elements.displaySettingsModal.hidden = true;
+      elements.codexHomeModal.hidden = true;
       elements.menu.hidden = true;
       bridge('reloadSSHHosts');
       scheduleWindowHeight();
@@ -53,6 +54,8 @@
       if (!payload || typeof payload.id !== 'string') return;
       closeSessionPreview();
       elements.remoteModal.hidden = true;
+      elements.displaySettingsModal.hidden = true;
+      elements.codexHomeModal.hidden = true;
       elements.menu.hidden = true;
       elements.renameForm.dataset.sessionId = payload.id;
       elements.renameInput.value = typeof payload.currentName === 'string' ? payload.currentName : '';
@@ -74,6 +77,8 @@
     const openDisplaySettings = () => {
       closeSessionPreview();
       elements.remoteModal.hidden = true;
+      elements.renameModal.hidden = true;
+      elements.codexHomeModal.hidden = true;
       elements.menu.hidden = true;
       for (const input of elements.displaySettingsForm.querySelectorAll('[data-display-limit]')) {
         input.value = String(appState.displayLimits[input.dataset.displayLimit]);
@@ -85,6 +90,32 @@
       });
       elements.displaySettingsModal.hidden = false;
       scheduleWindowHeight();
+    };
+    const closeCodexHome = () => {
+      elements.codexHomeModal.hidden = true;
+      scheduleWindowHeight();
+    };
+    const updateCodexHomeReset = () => {
+      elements.codexHomeReset.disabled = elements.codexHomeInput.value.trim()
+        === appState.defaultCodexHome;
+    };
+    const openCodexHome = () => {
+      closeSessionPreview();
+      elements.remoteModal.hidden = true;
+      elements.renameModal.hidden = true;
+      elements.displaySettingsModal.hidden = true;
+      elements.menu.hidden = true;
+      elements.codexHomeInput.value = appState.codexHome;
+      elements.codexHomeSource.textContent = appState.codexHomeCustom
+        ? `默认目录：${appState.defaultCodexHome}`
+        : '当前使用默认目录';
+      updateCodexHomeReset();
+      elements.codexHomeModal.hidden = false;
+      scheduleWindowHeight();
+      setTimeout(() => {
+        elements.codexHomeInput.focus();
+        elements.codexHomeInput.select();
+      }, 0);
     };
 
     elements.emptyAction.addEventListener('click', () => {
@@ -100,6 +131,7 @@
       window.codexPulse?.startDragging();
     });
     elements.displaySettingsMenu.addEventListener('click', openDisplaySettings);
+    elements.codexHomeMenu.addEventListener('click', openCodexHome);
     elements.sessionPreviewClose.addEventListener('click', closeSessionPreview);
     elements.sessionPreviewModal.addEventListener('click', event => {
       if (event.target === elements.sessionPreviewModal) closeSessionPreview();
@@ -193,6 +225,25 @@
         titleLines: appState.titleLines,
       });
     });
+    elements.codexHomeClose.addEventListener('click', closeCodexHome);
+    elements.codexHomeCancel.addEventListener('click', closeCodexHome);
+    elements.codexHomeModal.addEventListener('click', event => {
+      if (event.target === elements.codexHomeModal) closeCodexHome();
+    });
+    elements.codexHomeInput.addEventListener('input', updateCodexHomeReset);
+    elements.codexHomeReset.addEventListener('click', () => {
+      elements.codexHomeInput.value = appState.defaultCodexHome;
+      elements.codexHomeSource.textContent = '保存后使用默认目录';
+      updateCodexHomeReset();
+      elements.codexHomeInput.focus();
+    });
+    elements.codexHomeForm.addEventListener('submit', event => {
+      event.preventDefault();
+      const codexHome = elements.codexHomeInput.value.trim();
+      if (!codexHome) return;
+      closeCodexHome();
+      bridge('setCodexHome', { codexHome });
+    });
     elements.yoloToggle.addEventListener('click', event => {
       event.stopPropagation();
       appState.yoloEnabled = !appState.yoloEnabled;
@@ -241,6 +292,7 @@
       if (event.key !== 'Escape') return;
       if (!elements.sessionContextMenu.hidden) closeSessionContextMenu();
       else if (!elements.sessionPreviewModal.hidden) closeSessionPreview();
+      else if (!elements.codexHomeModal.hidden) closeCodexHome();
       else if (!elements.displaySettingsModal.hidden) closeDisplaySettings();
       else if (!elements.renameModal.hidden) closeRenameModal();
       else if (!elements.remoteModal.hidden) closeRemoteModal();

@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
-    path::PathBuf,
+    fs,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -24,6 +25,7 @@ pub struct AppState {
     inner: Arc<Mutex<Inner>>,
     scanner: Arc<Mutex<LocalScanner>>,
     claude_scanner: Arc<Mutex<ClaudeScanner>>,
+    default_codex_home: Arc<PathBuf>,
     settings_path: Arc<PathBuf>,
     local_refreshing: Arc<AtomicBool>,
     remote_refreshing: Arc<AtomicBool>,
@@ -41,12 +43,14 @@ struct Inner {
     local_initialized: bool,
     remote_initialized: bool,
     remote_loading: bool,
+    local_generation: u64,
     remote_generation: u64,
 }
 
 impl AppState {
     pub fn new(codex_home: PathBuf, claude_home: PathBuf, settings_path: PathBuf) -> Self {
         let loaded = settings::load(&settings_path);
+        let effective_codex_home = effective_codex_home(&loaded, &codex_home);
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 settings: loaded,
@@ -59,10 +63,12 @@ impl AppState {
                 local_initialized: false,
                 remote_initialized: false,
                 remote_loading: false,
+                local_generation: 0,
                 remote_generation: 0,
             })),
-            scanner: Arc::new(Mutex::new(LocalScanner::new(codex_home))),
+            scanner: Arc::new(Mutex::new(LocalScanner::new(effective_codex_home))),
             claude_scanner: Arc::new(Mutex::new(ClaudeScanner::new(claude_home))),
+            default_codex_home: Arc::new(codex_home),
             settings_path: Arc::new(settings_path),
             local_refreshing: Arc::new(AtomicBool::new(false)),
             remote_refreshing: Arc::new(AtomicBool::new(false)),
@@ -90,10 +96,14 @@ impl AppState {
     }
 
     pub fn refresh_all(&self, app: &AppHandle) {
+        self.trigger_local_refresh(app);
+        self.trigger_remote_refresh(app);
+    }
+
+    pub fn trigger_local_refresh(&self, app: &AppHandle) {
         let local = self.clone();
         let local_app = app.clone();
         thread::spawn(move || local.refresh_local(&local_app));
-        self.trigger_remote_refresh(app);
     }
 
     pub fn trigger_remote_refresh(&self, app: &AppHandle) {
@@ -106,6 +116,11 @@ impl AppState {
         if self.local_refreshing.swap(true, Ordering::AcqRel) {
             return;
         }
+        let generation = self
+            .inner
+            .lock()
+            .map(|inner| inner.local_generation)
+            .unwrap_or_default();
         let codex_result = self
             .scanner
             .lock()
@@ -117,23 +132,28 @@ impl AppState {
             .map_err(|_| "Claude 扫描器状态不可用".to_string())
             .and_then(|mut scanner| scanner.scan_sessions());
         if let Ok(mut inner) = self.inner.lock() {
-            match codex_result {
-                Ok(sessions) => {
-                    inner.local_sessions = sessions;
-                    inner.local_error = None;
-                }
-                Err(error) => {
-                    inner.local_error = Some(error);
-                    // 保留上一轮 Codex 结果，但先移除旧的 Claude 条目，
-                    // 避免下面的 extend 每次刷新都累积重复会话。
-                    inner
-                        .local_sessions
-                        .retain(|session| session.agent != "claude");
+            if inner.local_generation == generation {
+                match codex_result {
+                    Ok(sessions) => {
+                        inner.local_sessions = sessions;
+                        inner.local_error = None;
+                    }
+                    Err(error) => {
+                        inner.local_error = Some(error);
+                        // 保留上一轮 Codex 结果，但先移除旧的 Claude 条目，
+                        // 避免下面的 extend 每次刷新都累积重复会话。
+                        inner
+                            .local_sessions
+                            .retain(|session| session.agent != "claude");
+                    }
                 }
             }
             // Claude scan failures are non-fatal: Claude may not be installed.
             // Merge whatever Claude sessions we got on top of the Codex ones.
             if let Ok(claude_sessions) = claude_result {
+                inner
+                    .local_sessions
+                    .retain(|session| session.agent != "claude");
                 inner.local_sessions.extend(claude_sessions);
             }
             inner.local_initialized = true;
@@ -237,6 +257,11 @@ impl AppState {
             notch_status_supported: self.notch_status_supported.load(Ordering::Acquire),
             theme_mode: inner.settings.theme_mode.clone(),
             session_title_mode: inner.settings.session_title_mode.clone(),
+            codex_home: effective_codex_home(&inner.settings, &self.default_codex_home)
+                .to_string_lossy()
+                .into_owned(),
+            default_codex_home: self.default_codex_home.to_string_lossy().into_owned(),
+            codex_home_custom: !inner.settings.codex_home.is_empty(),
             display_limits: inner.settings.display_limits.clone(),
             title_lines: inner.settings.title_lines,
         }
@@ -248,6 +273,14 @@ impl AppState {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .settings
             .clone()
+    }
+
+    pub fn codex_home(&self) -> PathBuf {
+        let inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        effective_codex_home(&inner.settings, &self.default_codex_home)
     }
 
     pub fn session(&self, id: &str) -> Option<Session> {
@@ -294,6 +327,41 @@ impl AppState {
     pub fn set_session_title_mode(&self, mode: &str) -> Result<(), String> {
         let mode = if mode == "title" { "title" } else { "prompt" }.to_string();
         self.update_settings(|settings| settings.session_title_mode = mode)
+    }
+
+    pub fn set_codex_home(&self, value: &str) -> Result<(), String> {
+        let home = dirs::home_dir().ok_or("无法读取用户主目录")?;
+        let requested = settings::expand_codex_home(value, &home)?;
+        let custom = requested != *self.default_codex_home;
+        if custom {
+            let metadata =
+                fs::metadata(&requested).map_err(|_| "找不到指定的 Codex 数据目录".to_string())?;
+            if !metadata.is_dir() {
+                return Err("指定的 Codex 数据路径不是目录".into());
+            }
+        }
+
+        let mut scanner = self
+            .scanner
+            .lock()
+            .map_err(|_| "本地扫描器状态不可用".to_string())?;
+        let mut inner = self.inner.lock().map_err(|_| "应用状态不可用")?;
+        let mut next = inner.settings.clone();
+        next.codex_home = if custom {
+            requested.to_string_lossy().into_owned()
+        } else {
+            String::new()
+        };
+        next = next.normalize(settings::now_millis());
+        settings::save(&self.settings_path, &next).map_err(|error| error.to_string())?;
+        *scanner = LocalScanner::new(requested);
+        inner.settings = next;
+        inner
+            .local_sessions
+            .retain(|session| session.agent == "claude");
+        inner.local_error = None;
+        inner.local_generation += 1;
+        Ok(())
     }
 
     pub fn set_display_preferences(
@@ -461,6 +529,14 @@ impl AppState {
     }
 }
 
+fn effective_codex_home(settings: &Settings, default: &Path) -> PathBuf {
+    if settings.codex_home.is_empty() {
+        default.to_path_buf()
+    } else {
+        PathBuf::from(&settings.codex_home)
+    }
+}
+
 fn tracked_sessions(sessions: &[Session], settings: &Settings) -> Vec<Session> {
     let acknowledged = settings
         .acknowledged_completions
@@ -596,5 +672,36 @@ mod tests {
         settings.acknowledged_completions.push("turn".into());
         let result = tracked_sessions(&[session("completed", Some("turn"))], &settings);
         assert_eq!(result[0].state, "completed");
+    }
+
+    #[test]
+    fn switches_and_persists_codex_home_without_changing_notch_state() {
+        let root = tempfile::tempdir().unwrap();
+        let default_home = root.path().join("default");
+        let custom_home = root.path().join("custom");
+        fs::create_dir_all(&custom_home).unwrap();
+        let state = AppState::new(
+            default_home.clone(),
+            root.path().join("claude"),
+            root.path().join("settings.json"),
+        );
+
+        state.set_codex_home(custom_home.to_str().unwrap()).unwrap();
+        assert_eq!(state.codex_home(), custom_home);
+        assert!(!state.settings().codex_home.is_empty());
+        assert!(!state.settings().notch_status_enabled);
+
+        let reloaded = AppState::new(
+            default_home.clone(),
+            root.path().join("claude"),
+            root.path().join("settings.json"),
+        );
+        assert_eq!(reloaded.codex_home(), custom_home);
+
+        state
+            .set_codex_home(default_home.to_str().unwrap())
+            .unwrap();
+        assert_eq!(state.codex_home(), default_home);
+        assert!(state.settings().codex_home.is_empty());
     }
 }
