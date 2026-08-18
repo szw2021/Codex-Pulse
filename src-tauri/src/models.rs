@@ -100,8 +100,11 @@ impl DisplayLimits {
 pub struct Settings {
     pub yolo_enabled: bool,
     pub window_pinned: bool,
+    pub notch_status_enabled: bool,
     pub theme_mode: String,
     pub session_title_mode: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub codex_home: String,
     pub display_limits: DisplayLimits,
     pub title_lines: u8,
     pub completion_tracking_started_at: i64,
@@ -114,8 +117,10 @@ impl Default for Settings {
         Self {
             yolo_enabled: false,
             window_pinned: false,
+            notch_status_enabled: false,
             theme_mode: "system".into(),
             session_title_mode: "prompt".into(),
+            codex_home: String::new(),
             display_limits: DisplayLimits::default(),
             title_lines: 1,
             completion_tracking_started_at: 0,
@@ -138,6 +143,7 @@ impl Settings {
         } else {
             "prompt".into()
         };
+        self.codex_home = self.codex_home.trim().to_string();
         self.display_limits = self.display_limits.normalized();
         self.title_lines = if self.title_lines == 2 { 2 } else { 1 };
         if self.completion_tracking_started_at <= 0 {
@@ -162,10 +168,16 @@ pub struct PublishedState {
     pub remote_config_error: Option<String>,
     pub error: Option<String>,
     pub remote_loading: bool,
+    pub session_state_ready: bool,
     pub yolo_enabled: bool,
     pub window_pinned: bool,
+    pub notch_status_enabled: bool,
+    pub notch_status_supported: bool,
     pub theme_mode: String,
     pub session_title_mode: String,
+    pub codex_home: String,
+    pub default_codex_home: String,
+    pub codex_home_custom: bool,
     pub display_limits: DisplayLimits,
     pub title_lines: u8,
 }

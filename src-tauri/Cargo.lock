@@ -502,6 +502,8 @@ dependencies = [
  "chrono",
  "dirs",
  "glob",
+ "objc2",
+ "objc2-app-kit",
  "rusqlite",
  "serde",
  "serde_json",

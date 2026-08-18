@@ -1,6 +1,8 @@
 mod claude_scanner;
 mod commands;
 mod models;
+#[cfg(target_os = "macos")]
+mod notch_status;
 mod remote;
 mod scanner;
 mod session_activity;
@@ -67,6 +69,14 @@ async fn handle_action(
             apply_window_pinned(&app, pinned)?;
             state.publish(&app);
         }
+        "setNotchStatus" => {
+            let enabled = bool_field(&payload, "enabled")?;
+            if enabled && !state.notch_status_supported() {
+                return Err("当前没有检测到带刘海的屏幕".into());
+            }
+            state.set_notch_status_enabled(enabled)?;
+            state.publish(&app);
+        }
         "setThemeMode" => {
             state.set_theme_mode(&required_text(&payload, "mode")?)?;
             state.publish(&app);
@@ -74,6 +84,11 @@ async fn handle_action(
         "setSessionTitleMode" => {
             state.set_session_title_mode(&required_text(&payload, "mode")?)?;
             state.publish(&app);
+        }
+        "setCodexHome" => {
+            state.set_codex_home(&required_text(&payload, "codexHome")?)?;
+            state.publish(&app);
+            state.trigger_local_refresh(&app);
         }
         "setDisplayPreferences" => {
             let limits = payload.get("displayLimits").cloned().unwrap_or(Value::Null);
@@ -106,6 +121,17 @@ async fn handle_action(
             state.trigger_remote_refresh(&app);
         }
         "minimize" => minimize_window(&app)?,
+        "showMain" => show_window(&app)?,
+        "showNotchStatus" => {
+            #[cfg(target_os = "macos")]
+            if state.settings().notch_status_enabled && state.notch_status_supported() {
+                notch_status::show(&app)?;
+            }
+        }
+        "hideNotchStatus" => {
+            #[cfg(target_os = "macos")]
+            notch_status::hide(&app)?;
+        }
         "hide" => {
             if let Some(window) = app.get_webview_window("main") {
                 window.hide().map_err(|error| error.to_string())?;
@@ -158,12 +184,13 @@ fn handle_session_action(action: &str, payload: &Value, state: &AppState) -> Res
         });
     }
     let yolo = state.settings().yolo_enabled;
+    let codex_home = state.codex_home();
     match action {
         "resume" => {
             let command = if session.agent == "claude" {
                 commands::claude_resume_command(&session, yolo)
             } else {
-                commands::resume_command(&session, yolo)
+                commands::resume_command(&session, yolo, &codex_home)
             };
             commands::launch_terminal(&command)
         }
@@ -171,7 +198,7 @@ fn handle_session_action(action: &str, payload: &Value, state: &AppState) -> Res
             let command = if session.agent == "claude" {
                 commands::claude_resume_command(&session, yolo)
             } else {
-                commands::resume_command(&session, yolo)
+                commands::resume_command(&session, yolo, &codex_home)
             };
             copy_to_clipboard(&command)
         }
@@ -389,9 +416,18 @@ pub fn run() {
                 .or_else(|| dirs::home_dir().map(|home| home.join(".claude")))
                 .unwrap_or_else(|| PathBuf::from(".claude"));
             let state = AppState::new(codex_home, claude_home, settings::default_settings_path());
-            let pinned = state.settings().window_pinned;
+            let loaded_settings = state.settings();
+            let pinned = loaded_settings.window_pinned;
             app.manage(state.clone());
             setup_tray(app)?;
+            #[cfg(target_os = "macos")]
+            {
+                notch_status::setup(app)?;
+                let supported =
+                    notch_status::sync_now(app.handle(), loaded_settings.notch_status_enabled)
+                        .map_err(std::io::Error::other)?;
+                state.set_notch_status_supported(supported);
+            }
             apply_window_pinned(app.handle(), pinned).map_err(std::io::Error::other)?;
             state.start_background_refresh(app.handle().clone());
             show_window(app.handle()).map_err(std::io::Error::other)?;

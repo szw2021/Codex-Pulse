@@ -1,4 +1,7 @@
-use std::process::{Command, Stdio};
+use std::{
+    path::Path,
+    process::{Command, Stdio},
+};
 
 use crate::models::Session;
 
@@ -10,15 +13,16 @@ fn apple_script_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-pub fn resume_command(session: &Session, yolo_enabled: bool) -> String {
+pub fn resume_command(session: &Session, yolo_enabled: bool, codex_home: &Path) -> String {
     let mode = if yolo_enabled {
         " --dangerously-bypass-approvals-and-sandbox"
     } else {
         ""
     };
     format!(
-        "cd {} && codex resume{} {}",
+        "cd {} && CODEX_HOME={} codex resume{} {}",
         shell_quote(&session.cwd),
+        shell_quote(&codex_home.to_string_lossy()),
         mode,
         shell_quote(&session.id)
     )
@@ -137,8 +141,8 @@ mod tests {
     fn builds_safe_resume_commands() {
         let local = fixture();
         assert_eq!(
-            resume_command(&local, false),
-            "cd '/tmp/demo folder' && codex resume 'abc-123'"
+            resume_command(&local, false, Path::new("/tmp/codex data")),
+            "cd '/tmp/demo folder' && CODEX_HOME='/tmp/codex data' codex resume 'abc-123'"
         );
         let mut remote = fixture();
         remote.source = "remote".into();
@@ -173,6 +177,8 @@ mod tests {
         assert!(command.starts_with("ssh -t 'dev-box' "));
         assert!(command.contains("claude --resume '\\''remote-123'\\''"));
         let yolo_command = remote_resume_command(&remote, true);
-        assert!(yolo_command.contains("--resume '\\''remote-123'\\'' --dangerously-skip-permissions"));
+        assert!(
+            yolo_command.contains("--resume '\\''remote-123'\\'' --dangerously-skip-permissions")
+        );
     }
 }
