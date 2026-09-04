@@ -8,28 +8,37 @@
   const removeButton = document.querySelector('#quick-launch-remove');
   const form = document.querySelector('#quick-launch-form');
   const input = document.querySelector('#quick-launch-input');
+  const inlineSelect = document.querySelector('#quick-launch-inline-select');
+  const inlineOpen = document.querySelector('#quick-launch-inline-open');
+  const inlineManage = document.querySelector('#quick-launch-inline-manage');
   let directories = [];
 
   const bridge = (action, details = {}) => window.codexPulse?.send(action, details);
 
   function render() {
     const previous = select.value;
+    const inlinePrevious = inlineSelect.value;
     if (directories.length === 0) {
       const empty = document.createElement('option');
       empty.value = '';
       empty.textContent = '请先添加项目目录';
       select.replaceChildren(empty);
+      inlineSelect.replaceChildren(empty.cloneNode(true));
     } else {
-      select.replaceChildren(...directories.map(path => {
+      const options = directories.map(path => {
         const option = document.createElement('option');
         option.value = path;
         option.textContent = path;
         return option;
-      }));
+      });
+      select.replaceChildren(...options);
+      inlineSelect.replaceChildren(...options.map(option => option.cloneNode(true)));
       if (directories.includes(previous)) select.value = previous;
+      if (directories.includes(inlinePrevious)) inlineSelect.value = inlinePrevious;
     }
     openButton.disabled = !select.value;
     removeButton.disabled = !select.value;
+    inlineOpen.disabled = !inlineSelect.value;
   }
 
   function openModal(event) {
@@ -44,10 +53,10 @@
     modal.hidden = true;
   }
 
-  function launchSelected() {
-    if (!select.value) return;
+  function launch(path) {
+    if (!path) return;
     closeModal();
-    bridge('launchQuickDir', { path: select.value });
+    bridge('launchQuickDir', { path });
   }
 
   menuButton.addEventListener('click', openModal);
@@ -56,8 +65,11 @@
     if (event.target === modal) closeModal();
   });
   select.addEventListener('change', render);
-  select.addEventListener('dblclick', launchSelected);
-  openButton.addEventListener('click', launchSelected);
+  select.addEventListener('dblclick', () => launch(select.value));
+  openButton.addEventListener('click', () => launch(select.value));
+  inlineOpen.addEventListener('click', () => launch(inlineSelect.value));
+  inlineSelect.addEventListener('dblclick', () => launch(inlineSelect.value));
+  inlineManage.addEventListener('click', openModal);
   removeButton.addEventListener('click', () => {
     if (select.value) bridge('removeQuickLaunchDir', { path: select.value });
   });
