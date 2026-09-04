@@ -12,6 +12,7 @@
   const inlineOpen = document.querySelector('#quick-launch-inline-open');
   const inlineManage = document.querySelector('#quick-launch-inline-manage');
   let directories = [];
+  let launching = false;
 
   const bridge = (action, details = {}) => window.codexPulse?.send(action, details);
 
@@ -53,10 +54,19 @@
     modal.hidden = true;
   }
 
-  function launch(path) {
-    if (!path) return;
+  async function launch(path) {
+    if (!path || launching) return;
+    launching = true;
+    const originalLabel = inlineOpen.textContent;
+    inlineOpen.disabled = true;
+    inlineOpen.textContent = '启动中…';
     closeModal();
-    bridge('launchQuickDir', { path });
+    await bridge('launchQuickDir', { path });
+    setTimeout(() => {
+      launching = false;
+      inlineOpen.textContent = originalLabel;
+      render();
+    }, 600);
   }
 
   menuButton.addEventListener('click', openModal);

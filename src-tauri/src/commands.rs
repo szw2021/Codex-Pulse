@@ -113,7 +113,7 @@ fn application_exists(application: &str) -> bool {
 fn iterm_launch_script(command: &str, title: Option<&str>) -> String {
     let title = terminal_title(title.unwrap_or("Codex"));
     format!(
-        "tell application \"iTerm2\"\nactivate\nset targetWindow to (create window with default profile)\nset targetSession to current session of targetWindow\nset name of targetSession to \"{}\"\ntell targetSession to write text \"{}\"\ndelay 1\nset name of targetSession to \"{}\"\nend tell",
+        "tell application \"iTerm2\"\nactivate\nset targetWindow to (create window with default profile command \"/usr/bin/env DISABLE_AUTO_TITLE=true /bin/zsh -il\")\nset targetSession to current session of targetWindow\nset name of targetSession to \"{}\"\ndelay 0.35\ntell targetSession to write text \"{}\"\ndelay 0.65\nset name of targetSession to \"{}\"\nend tell",
         apple_script_string(&title),
         apple_script_string(command),
         apple_script_string(&title),
@@ -142,21 +142,14 @@ fn terminal_launch_script(command: &str) -> String {
 }
 
 fn run_apple_script(script: &str, application: &str) -> Result<(), String> {
-    let output = Command::new("/usr/bin/osascript")
+    Command::new("/usr/bin/osascript")
         .args(["-e", script])
         .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("无法打开 {application}：{error}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        Err(if detail.is_empty() {
-            format!("无法打开 {application}。")
-        } else {
-            format!("无法打开 {application}：{detail}")
-        })
-    }
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法打开 {application}：{error}"))
 }
 
 pub fn reveal_in_finder(path: &str) -> Result<(), String> {
@@ -243,13 +236,14 @@ mod tests {
 
     #[test]
     fn launches_new_iterm_window_with_escaped_command() {
-        let script = iterm_launch_script("printf \"hello\" && echo \\\\done", Some("EVA-MUX 会话"));
+        let script = iterm_launch_script("echo \"hello\" && echo \\\\done", Some("EVA-MUX 会话"));
         assert!(script.contains("tell application \"iTerm2\""));
         assert!(script.contains("create window with default profile"));
+        assert!(script.contains("DISABLE_AUTO_TITLE=true"));
         assert!(!script.contains("create tab"));
         assert!(script.contains("tell targetSession to write text"));
         assert!(script.contains("set name of targetSession to \"EVA-MUX 会话\""));
-        assert!(script.contains("printf \\\"hello\\\" && echo \\\\\\\\done"));
+        assert!(script.contains("echo \\\"hello\\\" && echo \\\\\\\\done"));
     }
 
     #[test]
