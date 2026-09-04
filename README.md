@@ -9,6 +9,8 @@ Codex Pulse 是一个基于 Tauri 的轻量 macOS 菜单栏应用，用来集中
 
 应用默认显示会话最后一条用户提示词，也可以在右上角菜单切换为原始标题。关注页按“进行中 / 新完成 / 失败”的配置数量控制窗口高度，多余内容自动隐藏并可切换到对应分类查看。
 
+单击本地会话会直接打开它：仍在运行的 Terminal 或 iTerm2 会按 TTY 精确切回原标签页，已结束的会话会在 Terminal 中恢复。会话详情改由悬停后的 ⓘ 按钮打开，其中提供重命名和删除入口。远程运行中的会话因无法从服务器反向定位本机终端，仍需回到原 SSH 窗口处理。
+
 带刘海的 Mac 可以在右上角菜单开启“刘海状态浮层”。应用使用 AppKit 读取屏幕安全区域，只在会话状态变化时从刘海下方展开提示，并在约 6 秒后自动收起；悬停会暂停收起，点击会打开主窗口。该功能是 Codex Pulse 自绘的原生浮动窗口，不是 macOS 系统灵动岛，无刘海屏幕会自动隐藏。
 
 本地会话每 2 秒只读扫描一次，远程服务器每 15 秒通过已有 SSH 配置扫描一次。应用不会上传会话数据，也不会持有 Codex 的 SQLite 数据库或 JSONL 会话文件。
@@ -51,7 +53,7 @@ src-tauri/target/release/bundle/dmg/Codex Pulse_0.2.0_aarch64.dmg
 
 也可以使用 `./scripts/build-app.sh` 将 `.app` 复制到 `dist/Codex Pulse.app`。
 
-首次点击“在终端中继续”时，macOS 可能请求允许 Codex Pulse 控制 Terminal。此权限只用于执行 `codex resume <session-id>` 或 `claude --resume <session-id>`。
+首次点击会话或“在终端中继续”时，macOS 可能请求允许 Codex Pulse 控制 Terminal 或 iTerm2。此权限只用于定位原终端标签页，或执行 `codex resume <session-id>` / `claude --resume <session-id>`。
 
 ## YOLO 模式
 

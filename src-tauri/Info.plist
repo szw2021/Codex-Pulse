@@ -5,6 +5,6 @@
   <key>LSUIElement</key>
   <true/>
   <key>NSAppleEventsUsageDescription</key>
-  <string>用于在 Terminal 中继续你选择的 Codex 会话。</string>
+  <string>用于在 Terminal 或 iTerm2 中定位和继续你选择的 Codex 会话。</string>
 </dict>
 </plist>

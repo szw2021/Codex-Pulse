@@ -120,6 +120,8 @@
     sessionPreviewTime: document.querySelector('#session-preview-time'),
     sessionPreviewActivityTitle: document.querySelector('#session-preview-activity-title'),
     sessionPreviewActivity: document.querySelector('#session-preview-activity'),
+    sessionPreviewRenameAction: document.querySelector('#session-preview-rename-action'),
+    sessionPreviewDeleteAction: document.querySelector('#session-preview-delete-action'),
     sessionPreviewProjectAction: document.querySelector('#session-preview-project-action'),
     sessionPreviewTerminalAction: document.querySelector('#session-preview-terminal-action'),
   };
@@ -561,16 +563,16 @@
     row.dataset.state = session.state;
     row.tabIndex = 0;
     row.setAttribute('role', 'button');
-    row.setAttribute('aria-label', `预览会话：${session.lastPrompt || session.title || '无标题会话'}`);
+    row.setAttribute('aria-label', `打开会话：${session.lastPrompt || session.title || '无标题会话'}`);
     row.addEventListener('click', event => {
       if (event.target.closest('button')) return;
-      openSessionPreview(session);
+      bridge('openSession', { id: session.id });
     });
     row.addEventListener('keydown', event => {
       if (event.key !== 'Enter' && event.key !== ' ') return;
       if (event.target.closest('button')) return;
       event.preventDefault();
-      openSessionPreview(session);
+      bridge('openSession', { id: session.id });
     });
     row.addEventListener('contextmenu', event => {
       event.preventDefault();
@@ -657,6 +659,7 @@
     const writerActive = Number.isInteger(session.pid) && session.pid > 0;
     const resumeBlocked = writerActive || session.state === 'active' || session.state === 'attention';
     const writerOwner = session.writerOwner || (session.source === 'remote' ? '远程终端' : '终端');
+    actions.append(window.codexPulseSessionActions.previewButton(session, openSessionPreview));
     if (session.source === 'remote') {
       actions.append(
         actionButton(
@@ -818,11 +821,13 @@
     elements.sessionPreviewProjectAction.disabled = remote && !session.remoteHost;
 
     elements.sessionPreviewTerminalAction.dataset.sessionId = session.id;
-    elements.sessionPreviewTerminalAction.dataset.action = remote ? 'remoteResume' : 'resume';
+    elements.sessionPreviewTerminalAction.dataset.action = 'openSession';
     elements.sessionPreviewTerminalAction.textContent = resumeBlocked
-      ? '正在原终端运行'
+      ? (remote ? '正在远程终端运行' : '定位原终端')
       : (remote ? '通过 SSH 继续' : '在终端中继续');
-    elements.sessionPreviewTerminalAction.disabled = resumeBlocked;
+    elements.sessionPreviewTerminalAction.disabled = remote && resumeBlocked;
+
+    window.codexPulseSessionActions.configurePreviewManagement(elements, session, resumeBlocked);
   }
 
   function refreshSessionPreview() {

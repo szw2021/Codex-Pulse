@@ -9,6 +9,7 @@ mod session_activity;
 mod session_process;
 mod settings;
 mod state;
+mod terminal_focus;
 
 use std::{env, path::PathBuf};
 
@@ -145,7 +146,7 @@ async fn handle_action(
             )?;
             state.publish(&app);
         }
-        "resume" | "copy" | "reveal" | "remoteResume" | "remoteCopy" => {
+        "openSession" | "resume" | "copy" | "reveal" | "remoteResume" | "remoteCopy" => {
             handle_session_action(&action, &payload, &state)?;
         }
         "showSessionMenu" => {}
@@ -186,6 +187,26 @@ fn handle_session_action(action: &str, payload: &Value, state: &AppState) -> Res
     let yolo = state.settings().yolo_enabled;
     let codex_home = state.codex_home();
     match action {
+        "openSession" => {
+            if session.source == "remote" {
+                if session.resume_blocked() {
+                    return Err("远程会话仍在原终端运行，暂时无法从本机精确定位。".into());
+                }
+                return commands::launch_terminal(&commands::remote_resume_command(&session, yolo));
+            }
+            if let Some(pid) = session.pid.filter(|pid| *pid > 0) {
+                return terminal_focus::focus_process_terminal(pid, session.writer_tty.as_deref());
+            }
+            if session.state == "active" || session.state == "attention" {
+                return Err("会话仍在运行，但没有检测到可定位的终端进程。".into());
+            }
+            let command = if session.agent == "claude" {
+                commands::claude_resume_command(&session, yolo)
+            } else {
+                commands::resume_command(&session, yolo, &codex_home)
+            };
+            commands::launch_terminal(&command)
+        }
         "resume" => {
             let command = if session.agent == "claude" {
                 commands::claude_resume_command(&session, yolo)

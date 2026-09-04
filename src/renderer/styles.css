@@ -624,11 +624,13 @@ input, textarea, [contenteditable="true"] {
 .session-preview-activity li[data-kind="command"] .activity-dot,
 .session-preview-activity li[data-kind="tool"] .activity-dot { background: var(--active); }
 .session-preview-activity li[data-kind="more"] .activity-dot { border-color: var(--line-strong); background: var(--surface-dialog); }
-.session-preview-actions { display: grid; grid-template-columns: 1fr 1.08fr; gap: 8px; margin-top: auto; padding-top: 14px; }
+.session-preview-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: auto; padding-top: 14px; }
 .session-preview-actions button { height: 36px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--text); background: var(--panel); font-size: 9.5px; font-weight: 680; cursor: pointer; }
 .session-preview-actions button:hover { background: var(--panel-hover); }
 .session-preview-actions button.primary { border-color: color-mix(in srgb, var(--active) 45%, transparent); color: var(--active); background: color-mix(in srgb, var(--active) 12%, transparent); }
 .session-preview-actions button.primary:hover { background: color-mix(in srgb, var(--active) 19%, transparent); }
+.session-preview-actions button.danger { border-color: color-mix(in srgb, var(--failed) 38%, transparent); color: var(--failed); background: color-mix(in srgb, var(--failed) 9%, transparent); }
+.session-preview-actions button.danger:hover { background: color-mix(in srgb, var(--failed) 16%, transparent); }
 .session-preview-actions button:disabled { color: var(--faint); background: var(--panel); opacity: 0.68; cursor: default; }
 
 .remote-dialog { width: 100%; max-height: 100%; padding: 12px; overflow: auto; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-dialog); box-shadow: var(--dialog-shadow); scrollbar-width: none; }

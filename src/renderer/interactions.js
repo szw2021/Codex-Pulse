@@ -150,6 +150,22 @@
       const id = elements.sessionPreviewTerminalAction.dataset.sessionId;
       if (action && id) bridge(action, { id });
     });
+    elements.sessionPreviewRenameAction.addEventListener('click', () => {
+      const id = elements.sessionPreviewRenameAction.dataset.sessionId;
+      if (!id || elements.sessionPreviewRenameAction.disabled) return;
+      openRenameModal({
+        id,
+        currentName: elements.sessionPreviewRenameAction.dataset.currentName || '',
+      });
+    });
+    elements.sessionPreviewDeleteAction.addEventListener('click', () => {
+      const id = elements.sessionPreviewDeleteAction.dataset.sessionId;
+      if (!id || elements.sessionPreviewDeleteAction.disabled) return;
+      const confirmed = window.confirm('确定删除这个会话吗？\n\n会话会被归档并从列表中移除，原始会话日志不会被删除。');
+      if (!confirmed) return;
+      closeSessionPreview();
+      bridge('archiveSession', { id });
+    });
     elements.remoteModalClose.addEventListener('click', closeRemoteModal);
     elements.reloadSSHHosts.addEventListener('click', () => {
       elements.reloadSSHHosts.textContent = '读取中…';

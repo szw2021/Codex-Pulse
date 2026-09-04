@@ -110,6 +110,8 @@
           <ol class="session-preview-activity" id="session-preview-activity"></ol>
         </div>
         <footer class="session-preview-actions">
+          <button type="button" id="session-preview-rename-action">重命名</button>
+          <button type="button" class="danger" id="session-preview-delete-action">删除会话</button>
           <button type="button" id="session-preview-project-action">打开项目</button>
           <button type="button" class="primary" id="session-preview-terminal-action">在终端中继续</button>
         </footer>
@@ -225,6 +227,7 @@
   </div>
   <script src="tauri-bridge.js"></script>
   <script src="interactions.js"></script>
+  <script src="session-actions.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
