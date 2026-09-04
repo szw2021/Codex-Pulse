@@ -112,7 +112,7 @@ fn application_exists(application: &str) -> bool {
 
 fn iterm_launch_script(command: &str) -> String {
     format!(
-        "tell application \"iTerm2\"\nactivate\nif (count of windows) = 0 then\nset targetWindow to (create window with default profile)\nelse\nset targetWindow to current window\ntell targetWindow to create tab with default profile\nend if\ntell current session of targetWindow to write text \"{}\"\nend tell",
+        "tell application \"iTerm2\"\nactivate\nset targetWindow to (create window with default profile)\ntell current session of targetWindow to write text \"{}\"\nend tell",
         apple_script_string(command),
     )
 }
@@ -225,10 +225,11 @@ mod tests {
     }
 
     #[test]
-    fn launches_new_iterm_tab_with_escaped_command() {
+    fn launches_new_iterm_window_with_escaped_command() {
         let script = iterm_launch_script("printf \"hello\" && echo \\\\done");
         assert!(script.contains("tell application \"iTerm2\""));
-        assert!(script.contains("create tab with default profile\n"));
+        assert!(script.contains("create window with default profile"));
+        assert!(!script.contains("create tab"));
         assert!(script.contains("current session of targetWindow to write text"));
         assert!(script.contains("printf \\\"hello\\\" && echo \\\\\\\\done"));
     }
