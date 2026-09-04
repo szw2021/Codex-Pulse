@@ -92,9 +92,9 @@ pub fn new_codex_yolo_command(directory: &Path) -> String {
     )
 }
 
-pub fn launch_terminal(command: &str) -> Result<(), String> {
+pub fn launch_terminal(command: &str, title: Option<&str>) -> Result<(), String> {
     if application_exists("iTerm") {
-        run_apple_script(&iterm_launch_script(command), "iTerm2")
+        run_apple_script(&iterm_launch_script(command, title), "iTerm2")
     } else {
         run_apple_script(&terminal_launch_script(command), "Terminal")
     }
@@ -110,11 +110,28 @@ fn application_exists(application: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-fn iterm_launch_script(command: &str) -> String {
+fn iterm_launch_script(command: &str, title: Option<&str>) -> String {
+    let title = terminal_title(title.unwrap_or("Codex"));
     format!(
-        "tell application \"iTerm2\"\nactivate\nset targetWindow to (create window with default profile)\ntell current session of targetWindow to write text \"{}\"\nend tell",
+        "tell application \"iTerm2\"\nactivate\nset targetWindow to (create window with default profile)\nset targetSession to current session of targetWindow\nset name of targetSession to \"{}\"\ntell targetSession to write text \"{}\"\ndelay 1\nset name of targetSession to \"{}\"\nend tell",
+        apple_script_string(&title),
         apple_script_string(command),
+        apple_script_string(&title),
     )
+}
+
+fn terminal_title(value: &str) -> String {
+    let cleaned: String = value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(80)
+        .collect();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        "Codex".into()
+    } else {
+        cleaned.into()
+    }
 }
 
 fn terminal_launch_script(command: &str) -> String {
@@ -226,11 +243,12 @@ mod tests {
 
     #[test]
     fn launches_new_iterm_window_with_escaped_command() {
-        let script = iterm_launch_script("printf \"hello\" && echo \\\\done");
+        let script = iterm_launch_script("printf \"hello\" && echo \\\\done", Some("EVA-MUX 会话"));
         assert!(script.contains("tell application \"iTerm2\""));
         assert!(script.contains("create window with default profile"));
         assert!(!script.contains("create tab"));
-        assert!(script.contains("current session of targetWindow to write text"));
+        assert!(script.contains("tell targetSession to write text"));
+        assert!(script.contains("set name of targetSession to \"EVA-MUX 会话\""));
         assert!(script.contains("printf \\\"hello\\\" && echo \\\\\\\\done"));
     }
 
@@ -247,5 +265,11 @@ mod tests {
             new_codex_yolo_command(Path::new("/tmp/eva mux")),
             "cd '/tmp/eva mux' && codex --yolo"
         );
+    }
+
+    #[test]
+    fn cleans_terminal_titles() {
+        assert_eq!(terminal_title("  EVA-MUX\n会话  "), "EVA-MUX会话");
+        assert_eq!(terminal_title("\n\t"), "Codex");
     }
 }

@@ -58,7 +58,11 @@ async fn handle_action(
             if !remote::is_valid_host(&host) {
                 return Err("SSH 主机名格式无效".into());
             }
-            commands::launch_terminal(&format!("ssh {}", commands::shell_quote(&host)))?;
+            let title = format!("{host} · SSH");
+            commands::launch_terminal(
+                &format!("ssh {}", commands::shell_quote(&host)),
+                Some(&title),
+            )?;
         }
         "setYolo" => {
             state.set_yolo(bool_field(&payload, "enabled")?)?;
@@ -101,7 +105,12 @@ async fn handle_action(
         }
         "launchQuickDir" => {
             let directory = state.quick_launch_dir(&required_text(&payload, "path")?)?;
-            commands::launch_terminal(&commands::new_codex_yolo_command(&directory))?;
+            let project = directory
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Codex");
+            let title = format!("{project} · Codex YOLO");
+            commands::launch_terminal(&commands::new_codex_yolo_command(&directory), Some(&title))?;
         }
         "setDisplayPreferences" => {
             let limits = payload.get("displayLimits").cloned().unwrap_or(Value::Null);
@@ -127,10 +136,10 @@ async fn handle_action(
         }
         "terminateRemote" => {
             let session = state.terminate_remote_session(&required_text(&payload, "id")?)?;
-            commands::launch_terminal(&commands::remote_resume_command(
-                &session,
-                state.settings().yolo_enabled,
-            ))?;
+            commands::launch_terminal(
+                &commands::remote_resume_command(&session, state.settings().yolo_enabled),
+                Some(&session.title),
+            )?;
             state.trigger_remote_refresh(&app);
         }
         "minimize" => minimize_window(&app)?,
@@ -204,7 +213,10 @@ fn handle_session_action(action: &str, payload: &Value, state: &AppState) -> Res
                 if session.resume_blocked() {
                     return Err("远程会话仍在原终端运行，暂时无法从本机精确定位。".into());
                 }
-                return commands::launch_terminal(&commands::remote_resume_command(&session, yolo));
+                return commands::launch_terminal(
+                    &commands::remote_resume_command(&session, yolo),
+                    Some(&session.title),
+                );
             }
             if let Some(pid) = session.pid.filter(|pid| *pid > 0) {
                 return terminal_focus::focus_process_terminal(pid, session.writer_tty.as_deref());
@@ -217,7 +229,7 @@ fn handle_session_action(action: &str, payload: &Value, state: &AppState) -> Res
             } else {
                 commands::resume_command(&session, yolo, &codex_home)
             };
-            commands::launch_terminal(&command)
+            commands::launch_terminal(&command, Some(&session.title))
         }
         "resume" => {
             let command = if session.agent == "claude" {
@@ -225,7 +237,7 @@ fn handle_session_action(action: &str, payload: &Value, state: &AppState) -> Res
             } else {
                 commands::resume_command(&session, yolo, &codex_home)
             };
-            commands::launch_terminal(&command)
+            commands::launch_terminal(&command, Some(&session.title))
         }
         "copy" => {
             let command = if session.agent == "claude" {
@@ -236,9 +248,10 @@ fn handle_session_action(action: &str, payload: &Value, state: &AppState) -> Res
             copy_to_clipboard(&command)
         }
         "reveal" => commands::reveal_in_finder(&session.cwd),
-        "remoteResume" => {
-            commands::launch_terminal(&commands::remote_resume_command(&session, yolo))
-        }
+        "remoteResume" => commands::launch_terminal(
+            &commands::remote_resume_command(&session, yolo),
+            Some(&session.title),
+        ),
         "remoteCopy" => copy_to_clipboard(&commands::remote_resume_command(&session, yolo)),
         _ => Ok(()),
     }
