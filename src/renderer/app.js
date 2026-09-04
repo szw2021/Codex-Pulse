@@ -31,7 +31,7 @@
     failed: 'failed',
   };
   const displayLimitKeys = Object.keys(defaultDisplayLimits);
-  const listChromeHeight = 123;
+  const listChromeHeight = 106;
   const focusGroupChromeHeight = 3 * 22;
 
   const appState = {
