@@ -651,62 +651,7 @@
     }
     top.append(mark, copy, rowTail);
 
-    const actions = document.createElement('span');
-    actions.className = 'row-actions';
-    const writerActive = Number.isInteger(session.pid) && session.pid > 0;
-    const resumeBlocked = writerActive || session.state === 'active' || session.state === 'attention';
-    const writerOwner = session.writerOwner || (session.source === 'remote' ? '远程终端' : '终端');
-    actions.append(window.codexPulseSessionActions.previewButton(session, openSessionPreview));
-    if (session.source === 'remote') {
-      actions.append(
-        actionButton(
-          'remoteCopy',
-          resumeBlocked
-            ? `会话已在${writerOwner}运行`
-            : (appState.yoloEnabled ? '复制远程 YOLO 继续命令' : '复制远程继续命令'),
-          '<rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
-          session.id,
-          {},
-          resumeBlocked,
-        ),
-        actionButton('remoteConnect', '在终端连接服务器', '<path d="M5 4h14v16H5z"/><path d="m8 9 3 3-3 3m5 0h3"/>', session.id, { host: session.remoteHost }),
-        actionButton(
-          'remoteResume',
-          resumeBlocked
-            ? `会话已在${writerOwner}运行`
-            : (appState.yoloEnabled ? '通过 SSH 以 YOLO 模式继续' : '通过 SSH 继续会话'),
-          '<path d="M8 7 4 12l4 5M16 7l4 5-4 5M10 19l4-14"/>',
-          session.id,
-          {},
-          resumeBlocked,
-        ),
-      );
-    } else {
-      actions.append(
-        actionButton(
-          'copy',
-          resumeBlocked
-            ? `会话已在${writerOwner}运行`
-            : (appState.yoloEnabled ? '复制 YOLO 继续命令' : '复制继续命令'),
-          '<rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
-          session.id,
-          {},
-          resumeBlocked,
-        ),
-        actionButton('reveal', '在 Finder 中显示项目', '<path d="M3 7h7l2 2h9v10H3z"/><path d="M3 7V5h7l2 2"/>', session.id),
-        actionButton(
-          'resume',
-          resumeBlocked
-            ? `会话已在${writerOwner}运行`
-            : (appState.yoloEnabled ? '以 YOLO 模式在终端中继续' : '在终端中继续'),
-          '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/>',
-          session.id,
-          {},
-          resumeBlocked,
-        ),
-      );
-    }
-    row.append(top, actions);
+    row.append(top);
     return row;
   }
 
@@ -887,6 +832,9 @@
       items.push(separatorElement);
     };
 
+    addAction('查看详情…', () => openSessionPreview(session));
+    addSeparator();
+
     if (remote) {
       addAction(resumeBlocked ? `会话已在${owner}运行` : '通过 SSH 继续', () => {
         bridge('remoteResume', { id: session.id });
@@ -945,26 +893,6 @@
     element.className = 'meta-separator';
     element.textContent = '·';
     return element;
-  }
-
-  function actionButton(action, label, svg, id, details = {}, disabled = false) {
-    const button = document.createElement('button');
-    button.className = 'action-button';
-    button.dataset.action = action;
-    button.title = label;
-    button.setAttribute('aria-label', label);
-    button.disabled = disabled;
-    button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${svg}</svg>`;
-    button.addEventListener('click', event => {
-      event.stopPropagation();
-      bridge(action, { id, ...details });
-      if (action === 'copy' || action === 'remoteCopy') {
-        const original = button.innerHTML;
-        button.textContent = '✓';
-        setTimeout(() => { button.innerHTML = original; }, 1000);
-      }
-    });
-    return button;
   }
 
   function relativeTime(timestamp) {

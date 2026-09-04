@@ -477,11 +477,8 @@ input, textarea, [contenteditable="true"] {
   background: var(--surface-actions);
   box-shadow: var(--actions-shadow);
 }
-.session-row:hover .row-actions,
-.session-row:focus-within .row-actions { display: flex; }
-.session-row[data-state="completed_pending"] .row-actions { right: 49px; }
 .session-row:hover .row-time,
-.session-row:focus-within .row-time { opacity: 0; }
+.session-row:focus-within .row-time { color: var(--muted); }
 .action-button {
   display: grid;
   place-items: center;
