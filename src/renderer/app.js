@@ -865,10 +865,14 @@
     }
     addSeparator();
     const claudeSession = session.agent === 'claude';
-    addAction(claudeSession ? 'Claude 会话暂不支持重命名' : '重命名…', () => openRenameModal({
-      id: session.id,
-      currentName: session.title || session.lastPrompt || '',
-    }), { disabled: claudeSession });
+    addAction(
+      claudeSession ? 'Claude 会话暂不支持重命名' : '重命名…',
+      () => window.codexPulseInteractions.openRenameModal({
+        id: session.id,
+        currentName: session.title || session.lastPrompt || '',
+      }),
+      { disabled: claudeSession },
+    );
     addAction(
       deletionBlocked
         ? '运行中不可删除'

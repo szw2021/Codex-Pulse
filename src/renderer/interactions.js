@@ -65,6 +65,7 @@
         elements.renameInput.select();
       }, 0);
     };
+    window.codexPulseInteractions.openRenameModal = openRenameModal;
     const closeDisplaySettings = () => {
       elements.displaySettingsModal.hidden = true;
       scheduleWindowHeight();
