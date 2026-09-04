@@ -91,6 +91,18 @@ async fn handle_action(
             state.publish(&app);
             state.trigger_local_refresh(&app);
         }
+        "addQuickLaunchDir" => {
+            state.add_quick_launch_dir(&required_text(&payload, "path")?)?;
+            state.publish(&app);
+        }
+        "removeQuickLaunchDir" => {
+            state.remove_quick_launch_dir(&required_text(&payload, "path")?)?;
+            state.publish(&app);
+        }
+        "launchQuickDir" => {
+            let directory = state.quick_launch_dir(&required_text(&payload, "path")?)?;
+            commands::launch_terminal(&commands::new_codex_yolo_command(&directory))?;
+        }
         "setDisplayPreferences" => {
             let limits = payload.get("displayLimits").cloned().unwrap_or(Value::Null);
             state.set_display_preferences(

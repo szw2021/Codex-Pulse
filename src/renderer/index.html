@@ -51,6 +51,7 @@
           </div>
           <button id="display-settings-menu">显示设置…</button>
           <button id="codex-home-menu">本机 Codex 数据目录…</button>
+          <button id="quick-launch-menu">快速启动 Codex YOLO…</button>
           <div class="menu-divider"></div>
           <button id="manage-remote-menu">管理远程服务器</button>
           <div class="menu-divider"></div>
@@ -173,6 +174,31 @@
       </section>
     </div>
 
+    <div class="modal-backdrop" id="quick-launch-modal" hidden>
+      <section class="quick-launch-dialog" role="dialog" aria-modal="true" aria-labelledby="quick-launch-title">
+        <header>
+          <strong id="quick-launch-title">快速启动 Codex YOLO</strong>
+          <button type="button" id="quick-launch-close" aria-label="关闭">×</button>
+        </header>
+        <label class="quick-launch-field">
+          <span>选择项目目录</span>
+          <select id="quick-launch-select" aria-label="项目目录"></select>
+        </label>
+        <div class="quick-launch-actions">
+          <button type="button" id="quick-launch-remove">移除</button>
+          <button type="button" class="primary" id="quick-launch-open">在 iTerm2 中打开</button>
+        </div>
+        <form id="quick-launch-form">
+          <label class="quick-launch-field">
+            <span>添加目录</span>
+            <input id="quick-launch-input" type="text" required autocomplete="off" spellcheck="false" placeholder="~/work/eva-mux">
+          </label>
+          <button type="submit">添加</button>
+        </form>
+        <p class="quick-launch-hint">打开后自动执行 codex --yolo；最多保存 20 个目录。</p>
+      </section>
+    </div>
+
     <div class="modal-backdrop" id="display-settings-modal" hidden>
       <section class="display-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="display-settings-title">
         <header>
@@ -226,6 +252,7 @@
     </div>
   </div>
   <script src="tauri-bridge.js"></script>
+  <script src="quick-launch.js"></script>
   <script src="interactions.js"></script>
   <script src="session-actions.js"></script>
   <script src="app.js"></script>

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -110,6 +110,7 @@ pub struct Settings {
     pub completion_tracking_started_at: i64,
     pub acknowledged_completions: Vec<String>,
     pub remote_hosts: Vec<String>,
+    pub quick_launch_dirs: Vec<String>,
 }
 
 impl Default for Settings {
@@ -126,6 +127,7 @@ impl Default for Settings {
             completion_tracking_started_at: 0,
             acknowledged_completions: Vec::new(),
             remote_hosts: Vec::new(),
+            quick_launch_dirs: Vec::new(),
         }
     }
 }
@@ -153,6 +155,10 @@ impl Settings {
         self.acknowledged_completions.dedup();
         self.remote_hosts.sort();
         self.remote_hosts.dedup();
+        let mut seen_directories = HashSet::new();
+        self.quick_launch_dirs
+            .retain(|path| !path.trim().is_empty() && seen_directories.insert(path.clone()));
+        self.quick_launch_dirs.truncate(20);
         self
     }
 }
@@ -163,6 +169,7 @@ pub struct PublishedState {
     pub sessions: Vec<Session>,
     pub remote_sessions: Vec<Session>,
     pub remote_hosts: Vec<String>,
+    pub quick_launch_dirs: Vec<String>,
     pub discovered_remote_hosts: Vec<String>,
     pub remote_errors: BTreeMap<String, String>,
     pub remote_config_error: Option<String>,

@@ -245,6 +245,7 @@ impl AppState {
             sessions: local,
             remote_sessions: remote,
             remote_hosts: inner.settings.remote_hosts.clone(),
+            quick_launch_dirs: inner.settings.quick_launch_dirs.clone(),
             discovered_remote_hosts: inner.discovered_remote_hosts.clone(),
             remote_errors: inner.remote_errors.clone(),
             remote_config_error: inner.remote_config_error.clone(),
@@ -436,6 +437,52 @@ impl AppState {
         inner.remote_config_error = None;
         inner.remote_generation += 1;
         settings::save(&self.settings_path, &inner.settings).map_err(|error| error.to_string())
+    }
+
+    pub fn add_quick_launch_dir(&self, value: &str) -> Result<(), String> {
+        let home = dirs::home_dir().ok_or("无法读取用户主目录")?;
+        let requested = settings::expand_directory(value, &home)?;
+        let metadata = fs::metadata(&requested).map_err(|_| "找不到指定的项目目录".to_string())?;
+        if !metadata.is_dir() {
+            return Err("指定的项目路径不是目录".into());
+        }
+        let canonical = requested
+            .canonicalize()
+            .unwrap_or(requested)
+            .to_string_lossy()
+            .into_owned();
+        let current = self.settings().quick_launch_dirs;
+        if current.len() >= 20 && !current.contains(&canonical) {
+            return Err("最多只能保存 20 个快捷启动目录".into());
+        }
+        self.update_settings(|settings| {
+            if !settings.quick_launch_dirs.contains(&canonical) {
+                settings.quick_launch_dirs.push(canonical);
+            }
+        })
+    }
+
+    pub fn remove_quick_launch_dir(&self, value: &str) -> Result<(), String> {
+        let value = value.to_string();
+        self.update_settings(|settings| settings.quick_launch_dirs.retain(|path| path != &value))
+    }
+
+    pub fn quick_launch_dir(&self, value: &str) -> Result<PathBuf, String> {
+        let configured = self
+            .inner
+            .lock()
+            .map_err(|_| "应用状态不可用")?
+            .settings
+            .quick_launch_dirs
+            .iter()
+            .find(|path| path.as_str() == value)
+            .cloned()
+            .ok_or("请先添加并选择一个项目目录")?;
+        let path = PathBuf::from(configured);
+        if !path.is_dir() {
+            return Err("项目目录已不存在，请移除后重新添加".into());
+        }
+        Ok(path)
     }
 
     pub fn rename_session(&self, id: &str, name: &str) -> Result<(), String> {

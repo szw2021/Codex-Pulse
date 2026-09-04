@@ -29,12 +29,20 @@ pub fn default_settings_path() -> PathBuf {
 }
 
 pub fn expand_codex_home(value: &str, home: &Path) -> Result<PathBuf, String> {
+    expand_directory_with_label(value, home, "Codex 数据目录")
+}
+
+pub fn expand_directory(value: &str, home: &Path) -> Result<PathBuf, String> {
+    expand_directory_with_label(value, home, "项目目录")
+}
+
+fn expand_directory_with_label(value: &str, home: &Path, label: &str) -> Result<PathBuf, String> {
     let value = value.trim();
     if value.is_empty() {
-        return Err("Codex 数据目录不能为空".into());
+        return Err(format!("{label}不能为空"));
     }
     if value.chars().any(char::is_control) {
-        return Err("Codex 数据目录包含无效字符".into());
+        return Err(format!("{label}包含无效字符"));
     }
     let path = if value == "~" {
         home.to_path_buf()
@@ -101,6 +109,7 @@ mod tests {
         assert_eq!(settings.display_limits.completed_pending, 3);
         assert_eq!(settings.display_limits.failed, 2);
         assert_eq!(settings.title_lines, 2);
+        assert!(settings.quick_launch_dirs.is_empty());
         assert!(settings.completion_tracking_started_at > 0);
     }
 
@@ -113,5 +122,15 @@ mod tests {
         );
         assert!(expand_codex_home("custom-codex", home).is_err());
         assert!(expand_codex_home("/tmp/custom-codex", home).is_ok());
+    }
+
+    #[test]
+    fn expands_project_directories() {
+        let home = Path::new("/Users/tester");
+        assert_eq!(
+            expand_directory("~/work/eva-mux", home).unwrap(),
+            home.join("work/eva-mux")
+        );
+        assert!(expand_directory("relative/project", home).is_err());
     }
 }

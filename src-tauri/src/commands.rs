@@ -85,19 +85,62 @@ pub fn remote_resume_command(session: &Session, yolo_enabled: bool) -> String {
     )
 }
 
+pub fn new_codex_yolo_command(directory: &Path) -> String {
+    format!(
+        "cd {} && codex --yolo",
+        shell_quote(&directory.to_string_lossy())
+    )
+}
+
 pub fn launch_terminal(command: &str) -> Result<(), String> {
-    let script = format!(
-        "tell application \"Terminal\"\nactivate\ndo script \"{}\"\nend tell",
-        apple_script_string(command)
-    );
-    Command::new("/usr/bin/osascript")
-        .args(["-e", &script])
+    if application_exists("iTerm") {
+        run_apple_script(&iterm_launch_script(command), "iTerm2")
+    } else {
+        run_apple_script(&terminal_launch_script(command), "Terminal")
+    }
+}
+
+fn application_exists(application: &str) -> bool {
+    Command::new("/usr/bin/open")
+        .args(["-Ra", application])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("无法打开终端：{error}"))
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn iterm_launch_script(command: &str) -> String {
+    format!(
+        "tell application \"iTerm2\"\nactivate\nif (count of windows) = 0 then\ncreate window with default profile command \"{}\"\nelse\ntell current window to create tab with default profile command \"{}\"\nend if\nend tell",
+        apple_script_string(command),
+        apple_script_string(command)
+    )
+}
+
+fn terminal_launch_script(command: &str) -> String {
+    format!(
+        "tell application \"Terminal\"\nactivate\ndo script \"{}\"\nend tell",
+        apple_script_string(command)
+    )
+}
+
+fn run_apple_script(script: &str, application: &str) -> Result<(), String> {
+    let output = Command::new("/usr/bin/osascript")
+        .args(["-e", script])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("无法打开 {application}：{error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if detail.is_empty() {
+            format!("无法打开 {application}。")
+        } else {
+            format!("无法打开 {application}：{detail}")
+        })
+    }
 }
 
 pub fn reveal_in_finder(path: &str) -> Result<(), String> {
@@ -179,6 +222,29 @@ mod tests {
         let yolo_command = remote_resume_command(&remote, true);
         assert!(
             yolo_command.contains("--resume '\\''remote-123'\\'' --dangerously-skip-permissions")
+        );
+    }
+
+    #[test]
+    fn launches_new_iterm_tab_with_escaped_command() {
+        let script = iterm_launch_script("printf \"hello\" && echo \\\\done");
+        assert!(script.contains("tell application \"iTerm2\""));
+        assert!(script.contains("create tab with default profile"));
+        assert!(script.contains("printf \\\"hello\\\" && echo \\\\\\\\done"));
+    }
+
+    #[test]
+    fn keeps_terminal_as_fallback() {
+        let script = terminal_launch_script("codex resume 'abc-123'");
+        assert!(script.contains("tell application \"Terminal\""));
+        assert!(script.contains("do script \"codex resume 'abc-123'\""));
+    }
+
+    #[test]
+    fn builds_new_codex_yolo_command() {
+        assert_eq!(
+            new_codex_yolo_command(Path::new("/tmp/eva mux")),
+            "cd '/tmp/eva mux' && codex --yolo"
         );
     }
 }
