@@ -31,8 +31,7 @@
     failed: 'failed',
   };
   const displayLimitKeys = Object.keys(defaultDisplayLimits);
-  const listChromeHeight = 106;
-  const focusGroupChromeHeight = 3 * 22;
+  const listChromeHeight = 112;
 
   const appState = {
     sessions: [],
@@ -167,13 +166,11 @@
     const number = Number(value);
     return Number.isInteger(number) && number >= 1 && number <= 8 ? number : fallback;
   };
-  const focusDisplayLimit = () => displayLimitKeys.reduce(
-    (total, key) => total + appState.displayLimits[key],
-    0,
-  );
-  const focusWindowHeight = () => {
+  const sessionListHeight = () => {
     const rowHeight = appState.titleLines === 1 ? 52 : 67;
-    return listChromeHeight + focusGroupChromeHeight + focusDisplayLimit() * rowHeight + 8;
+    const groups = elements.list.querySelectorAll('.session-group-heading').length;
+    const rows = elements.list.querySelectorAll('.session-row, .system-issue').length;
+    return listChromeHeight + groups * 22 + rows * rowHeight + 8;
   };
   let layoutFrame = null;
   let lastRequestedHeight = null;
@@ -182,7 +179,7 @@
     if (layoutFrame !== null) cancelAnimationFrame(layoutFrame);
     layoutFrame = requestAnimationFrame(() => {
       layoutFrame = null;
-      const listHeight = focusWindowHeight();
+      const listHeight = sessionListHeight();
       let height = listHeight;
       if (!elements.sessionPreviewModal.hidden) {
         height = Math.max(listHeight, 420);
